@@ -27,9 +27,12 @@ from .music import get_music_cover_thumb, is_valid_music
 from .card import get_character_sd_image
 from ...imgtool import shrink_image
 
+# 已丢弃的区服 ['en', 'tw', 'kr']
+# MYSEKAI_REGIONS = ['jp', 'tw', 'cn', 'kr']
+# BD_MYSEKAI_REGIONS = ['cn', 'tw', 'kr']
 
-MYSEKAI_REGIONS = ['jp', 'tw', 'cn', 'kr', 'en']
-BD_MYSEKAI_REGIONS = ['cn', 'tw', 'kr']
+MYSEKAI_REGIONS = ['jp', 'cn']
+BD_MYSEKAI_REGIONS = ['cn']
 
 bd_msr_sub = SekaiGroupSubHelper("msr", "msr指令权限", BD_MYSEKAI_REGIONS)
 msr_sub = SekaiUserSubHelper("msr", "烤森资源查询自动推送", MYSEKAI_REGIONS, only_one_group=True)
@@ -743,7 +746,7 @@ async def compose_mysekai_res_image(ctx: SekaiHandlerContext, qid: int, show_har
 
     upload_time = datetime.fromtimestamp(mysekai_info['upload_time'] / 1000)
     if upload_time < get_mysekai_last_refresh_time_and_reason(ctx)[0] and check_time:
-        raise ReplyException(f"数据已过期: {upload_time.strftime('%m-%d %H:%M:%S')} from {mysekai_info.get('source', '?')}")
+        raise ReplyException(f"数据已过期: {upload_time.strftime('%y-%m-%d %H:%M:%S')} from {mysekai_info.get('source', '?')}")
     
     assert_and_reply('userMysekaiHarvestMaps' in mysekai_info.get('updatedResources', {}), 
                      f"你的Mysekai抓包数据不完整，可以尝试退出游戏到标题界面后重新上传抓包数据")

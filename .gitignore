@@ -146,3 +146,7 @@ sandbox/
 config/
 
 src/private/
+
+workspace/
+run/
+Makefile

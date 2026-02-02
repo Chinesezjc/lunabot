@@ -29,10 +29,16 @@ class CharacterNicknameData:
 
 _character_nickname_data = CharacterNicknameData()
 
-ALL_SERVER_REGIONS = ['jp', 'en', 'tw', 'kr', 'cn']
-ALL_SERVER_REGION_NAMES = ['日服', '国际服', '台服', '韩服', '国服']
-NEED_TRANSLATE_REGIONS = ['jp', 'en', 'kr']
-TRANSLATED_REGIONS = ['cn', 'tw']
+# 已丢弃的区服 ['en', 'tw', 'kr']
+# ALL_SERVER_REGIONS = ['jp', 'en', 'tw', 'kr', 'cn']
+# ALL_SERVER_REGION_NAMES = ['日服', '国际服', '台服', '韩服', '国服']
+# NEED_TRANSLATE_REGIONS = ['jp', 'en', 'kr']
+# TRANSLATED_REGIONS = ['cn', 'tw']
+
+ALL_SERVER_REGIONS = ['jp', 'cn']
+ALL_SERVER_REGION_NAMES = ['日服', '国服']
+NEED_TRANSLATE_REGIONS = ['jp']
+TRANSLATED_REGIONS = ['cn']
 
 REGION_UTC_OFFSET = {
     'jp': 9,

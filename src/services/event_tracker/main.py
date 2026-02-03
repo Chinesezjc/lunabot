@@ -7,7 +7,10 @@ from tenacity import retry, wait_fixed, stop_after_attempt
 
 set_log_level('INFO')
 
-ALL_SERVER_REGIONS = ['jp', 'cn', 'tw', 'kr', 'en']
+# 已丢弃的区服
+# ALL_SERVER_REGIONS = ['jp', 'cn', 'tw', 'kr', 'en']
+
+ALL_SERVER_REGIONS = ['jp', 'cn']
 
 RECORD_TIME_AFTER_EVENT_END_CFG = config.item('sk.record_time_after_event_end_minutes')
 RECORD_INTERVAL_CFG = config.item('sk.record_interval_seconds')

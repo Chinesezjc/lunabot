@@ -41,7 +41,7 @@ def get_unit_logo(unit: str, size: int = None):
 
 # 获取团图标
 def get_unit_icon(unit: str, size: int = None):
-    img = SekaiHandlerContext.from_region('jp').static_imgs.get(f"icon_{unit}.png")
+    img = SekaiHandlerContext.from_region('jp').static_imgs.get(f"icon_{unit}.svg")
     if size is not None:
         img = img.resize((size, size))
     return img

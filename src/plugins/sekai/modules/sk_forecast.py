@@ -184,10 +184,10 @@ async def get_33kit_forecast_data(region: str, event_id: int, chapter_id: int) -
             data.rank_data[int(rank)] = RankForecastData(final_score=score)
     return data
 
-async def get_snowy_forecast_data(region: str, event_id: int, chapter_id: int | None = None) -> ForecastData | None:
-    cfg = config.get('sk.forecast.snowy')
+async def get_moe_forecast_data(region: str, event_id: int, chapter_id: int | None = None) -> ForecastData | None:
+    cfg = config.get('sk.forecast.moe')
     data = ForecastData(
-        source='snowy',
+        source='moe',
         region=region,
         event_id=event_id,
     )
@@ -268,7 +268,7 @@ async def get_sekarun_forecast_data(region: str, event_id: int, chapter_id: int 
 FORECAST_DATA_GET_FUNCS = {
     'local': get_local_forecast_data,
     '33kit': get_33kit_forecast_data,
-    'snowy': get_snowy_forecast_data,
+    'moe': get_moe_forecast_data,
     'sekarun': get_sekarun_forecast_data,
 }
 

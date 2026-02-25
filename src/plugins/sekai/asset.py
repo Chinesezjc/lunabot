@@ -1118,7 +1118,7 @@ class WebJsonRes:
             dump_json(self.data, self.file_cache_path, indent=False)
     
     async def _check_before_get(self, timeout: float, raise_on_no_data: bool):
-        if not self.data or not self.update_interval or datetime.now() - self.update_time > self.update_interval:
+        if not self.data or not self.update_interval or not self.update_time or datetime.now() - self.update_time > self.update_interval:
             try:
                 await asyncio.wait_for(self._download(), timeout)
             except Exception as e:

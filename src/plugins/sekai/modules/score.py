@@ -13,7 +13,7 @@ from .music import (
     get_music_diff_level,
     is_valid_music,
     get_music_diff_info,
-    musicmetas_json,
+    get_musicmetas_json,
     get_music_leaderboard_data,
 )
 from decimal import Decimal, ROUND_DOWN
@@ -151,6 +151,7 @@ def get_valid_scores(target_point: int, event_rate: int, max_event_bonus: int, l
 
 # 合成控分图片
 async def compose_score_control_image(ctx: SekaiHandlerContext, target_point: int, music_id: int, wl: bool) -> Image.Image:
+    musicmetas_json = get_musicmetas_json(ctx.region)
     meta = find_by(await musicmetas_json.get(), "music_id", music_id)
     assert_and_reply(meta, f"找不到歌曲ID={music_id}的基础分数据")
     event_rate = int(meta['event_rate'])
@@ -284,6 +285,7 @@ async def compose_custom_room_score_control_image(ctx: SekaiHandlerContext, targ
     results.sort(key=lambda x: (x[1], -x[0]))
 
     # 查找结果中出现的pt系数对应的歌曲
+    musicmetas_json = get_musicmetas_json(ctx.region)
     music_metas = find_by(await musicmetas_json.get(), "difficulty", "master", mode='all')
     MUSIC_NUM_PER_EVENT_RATE = 3
     event_rate_music_list_map: dict[int, list[dict]] = {}
@@ -369,6 +371,7 @@ async def compose_music_meta_image(ctx: SekaiHandlerContext, mids: list[int]) ->
                 style1 = TextStyle(font=DEFAULT_BOLD_FONT, size=20, color=BLACK)
                 style2 = TextStyle(font=DEFAULT_FONT,      size=20, color=(50, 50, 50))
                 
+                musicmetas_json = get_musicmetas_json(ctx.region)
                 metas = find_by(await musicmetas_json.get(), "music_id", mid, mode='all')
                 assert_and_reply(metas, f"找不到歌曲ID={mid}的Meta数据")
 
@@ -498,6 +501,7 @@ async def compose_music_board_image(
     # 计算分数信息
     keep_one_diff_per_music = (target == 'time')
     rows = await get_music_leaderboard_data(
+        region=ctx.region,
         skills=skills,
         skill_strategy=skill_strategy,
         deck_bonus=deck_bonus,
@@ -764,7 +768,7 @@ async def _(ctx: SekaiHandlerContext):
 pjsk_music_meta = SekaiCmdHandler([
     "/pjsk music meta", "/music meta",
     "/歌曲meta", 
-], regions=["jp"], priority=1)
+], regions=["cn","jp","tw","en","kr"], priority=1)
 pjsk_music_meta.check_cdrate(cd).check_wblist(gbl)
 @pjsk_music_meta.handle()
 async def _(ctx: SekaiHandlerContext):

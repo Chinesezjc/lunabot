@@ -220,8 +220,8 @@ sk:
       error_retry_minutes: 10
       url: https://sekai-data.3-3.dev/predict.json
 
-    snowy:
-      name: "SnowyBot预测"
+    moe:
+      name: "Moesekai预测"
       enabled: true
       regions: ['jp', 'cn']
       support_wl: false
@@ -229,7 +229,7 @@ sk:
       update_interval_minutes: 10
       error_retry_minutes: 10
       url: https://sekaibangdan.exmeaning.com/api/public/v1/{region}data/{event_id}
-      ranks: [10, 30, 50, 100, 200, 300, 500, 1000, 2000, 3000, 5000, 10000, 50000, 100000]
+      ranks: [50, 100, 200, 300, 400, 500, 1000, 2000, 3000, 4000, 5000, 10000]
 
     sekarun:
       name: "SekaRun预测"

@@ -31,11 +31,22 @@ music_name_retriever = get_text_retriever(f"music_name")
 music_cn_titles = WebJsonRes("曲名中文翻译", "https://i18n-json.sekai.best/zh-CN/music_titles.json", update_interval=timedelta(days=1))
 music_en_titles = WebJsonRes("曲名英文翻译", "https://i18n-json.sekai.best/en/music_titles.json", update_interval=timedelta(days=1))
 
-musicmetas_json = WebJsonRes(
+default_musicmetas_json = WebJsonRes(
     name="MusicMeta", 
     url = config.get("deck.music_meta_url"),
     update_interval=timedelta(hours=1),
 )
+# 获取各个区服的music_meta_urls
+music_meta_urls = config.get("deck.music_meta_urls", {})
+region_musicmetas_json: dict[str, WebJsonRes] = {
+    region: WebJsonRes(
+        name=f"{region.upper()}-MusicMeta", 
+        url = url,
+        update_interval=timedelta(hours=1),
+    ) for region, url in music_meta_urls.items()
+}
+def get_musicmetas_json(region:str)->WebJsonRes:
+    return region_musicmetas_json.get(region, default_musicmetas_json)
 
 
 DIFF_NAMES = [
@@ -708,6 +719,7 @@ LEADERBOARD_DIFF_PRIORITY = {
 
 # 获取歌曲分数排行榜数据
 async def get_music_leaderboard_data(
+    region: str,
     skills: list[float],
     skill_strategy: str,
     deck_bonus: float,
@@ -718,6 +730,7 @@ async def get_music_leaderboard_data(
     target: str | list[str] = 'all',
     live_type: str | list[str] = 'all',
 ) -> list[dict]:
+    musicmetas_json = get_musicmetas_json(region)
     musicmetas = await musicmetas_json.get(raise_on_no_data=False)
     if not musicmetas:
         return []
@@ -1099,7 +1112,10 @@ async def compose_music_detail_image(ctx: SekaiHandlerContext, mid: int, title: 
 
     # 更新歌曲排行缓存
     global _last_musicmeta_hash, _last_music_leaderboard_info
-    musicmeta_hash = await musicmetas_json.get_hash()
+    musicmeta_hash = None
+    musicmetas_json = get_musicmetas_json(ctx.region)
+    if musicmetas_json:
+        musicmeta_hash = await musicmetas_json.get_hash()
     live_type_keys = list(LEADERBOARD_LIVETYPE_NAMES.keys())
     target_keys = list(LEADERBOARD_TARGET_NAMES.keys())
     if musicmeta_hash and musicmeta_hash != _last_musicmeta_hash:
@@ -1108,6 +1124,7 @@ async def compose_music_detail_image(ctx: SekaiHandlerContext, mid: int, title: 
         for live_type in live_type_keys:
             for target in target_keys:
                 leaderboard = await get_music_leaderboard_data(
+                    region=ctx.region,
                     skills=LEADERBOARD_LIVETYPE_SKILLS[live_type],
                     skill_strategy='avg',
                     deck_bonus=LEADERBOARD_DECK_BONUS,
@@ -1505,7 +1522,10 @@ async def get_music_audio_length(ctx: SekaiHandlerContext, mid: int) -> Optional
     if length := file_db.get(key, None):
         return timedelta(seconds=length)
     # 尝试从music_meta获取
-    music_metas = await musicmetas_json.get(raise_on_no_data=False)
+    music_metas = None
+    musicmetas_json = get_musicmetas_json(ctx.region)
+    if musicmetas_json:
+        music_metas = await musicmetas_json.get(raise_on_no_data=False)
     if music_metas and (item := find_by(music_metas, 'music_id', mid)):
         length = item['music_time']
     else:

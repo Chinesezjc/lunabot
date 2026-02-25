@@ -23,7 +23,7 @@ from .music import (
     get_music_cover_thumb,
     get_valid_musics,
     get_music_diff_info,
-    musicmetas_json,
+    get_musicmetas_json,
 )
 from .mysekai import MYSEKAI_REGIONS
 from sekai_deck_recommend_cpp import (
@@ -625,7 +625,7 @@ async def extract_music_and_diff(
     live_type: str, 
     additional_args: dict,
 ) -> str:
-    jp_ctx = SekaiHandlerContext.from_region('jp')
+    # jp_ctx = SekaiHandlerContext.from_region('jp')
     search_options = MusicSearchOptions(
         use_emb=False,
         use_id=True,
@@ -641,7 +641,7 @@ async def extract_music_and_diff(
         for seg in segs:
             music_diff, seg = extract_diff(seg, default='master')
             search_options.diff = music_diff
-            music = (await search_music(jp_ctx, seg, search_options)).music
+            music = (await search_music(ctx, seg, search_options)).music
             assert_and_reply(music, f"在组卡支持的所有歌曲中找不到\"{seg}\"")
             additional_args['music_diffs_to_compare'].append((music['id'], music_diff, seg))
         return ""
@@ -651,7 +651,7 @@ async def extract_music_and_diff(
     args = args.strip()
     if args:
         search_options.diff = options.music_diff
-        music = (await search_music(jp_ctx, args, search_options)).music
+        music = (await search_music(ctx, args, search_options)).music
         err_msg = f"在组卡支持的所有歌曲中找不到\"{args}\""
         if len(args.split()) > 1:
             err_msg += "，如果你要对多首歌曲进行比较，请加上\"歌曲比较\""
@@ -1538,6 +1538,7 @@ async def compose_deck_recommend_image(
 /指令 ... 歌曲比较 龙 虾ex #1 2 3 4 5
 """.strip())
             # 没有指定比较的歌曲，则通过musicmeta计算出5张卡技能加分全100%的情况的前排候选歌曲，
+            musicmetas_json = get_musicmetas_json(ctx.region)
             musicmetas = await musicmetas_json.get()
             music_values = []
             is_multi = options.live_type in ['multi', 'cheerful']
@@ -1664,7 +1665,7 @@ async def compose_deck_recommend_image(
 
     # ---------------------------- 绘图数据获取 ---------------------------- #
 
-    jp_ctx = SekaiHandlerContext.from_region('jp')
+    # jp_ctx = SekaiHandlerContext.from_region('jp')
 
     if not music_compare:
         # 获取一般情况音乐标题和封面
@@ -1672,10 +1673,10 @@ async def compose_deck_recommend_image(
             music_title = "おまかせ（所有歌曲平均）"
             music_cover = ctx.static_imgs.get('omakase.png')
         else:
-            music = await jp_ctx.md.musics.find_by_id(options.music_id)
+            music = await ctx.md.musics.find_by_id(options.music_id)
             music_title = truncate(music['title'], 20)
             music_title += f" ({options.music_diff.upper()})"
-            music_cover = await get_music_cover_thumb(jp_ctx, options.music_id)
+            music_cover = await get_music_cover_thumb(ctx, options.music_id)
 
     # 获取活动banner和标题
     live_name = "协力"
@@ -1942,12 +1943,12 @@ async def compose_deck_recommend_image(
                                     TextBox("歌曲", th_style2).set_h(gh // 2).set_content_align('c')
                                     Spacer(h=6)
                                     for (mid, diff, marg), deck in zip(music_diffs_to_compare, result_decks):
-                                        music = await jp_ctx.md.musics.find_by_id(mid)
+                                        music = await ctx.md.musics.find_by_id(mid)
                                         music_title = music['title'] + f" ({diff.upper()})"
                                         with VSplit().set_content_align('c').set_item_align('c').set_sep(8).set_padding(0).set_h(gh):
                                             with Frame().set_content_align('c'):
                                                 Spacer(w=64, h=64).set_bg(FillBg(fill=DIFF_COLORS[diff])).set_offset((3, 3))
-                                                ImageBox(await get_music_cover_thumb(jp_ctx, mid), size=(64, 64)).set_offset((-3, -3))
+                                                ImageBox(await get_music_cover_thumb(ctx, mid), size=(64, 64)).set_offset((-3, -3))
                                             text = f"{mid}"
                                             if marg: text = f"{truncate(marg, 8)} → " + text
                                             TextBox(text, TextStyle(font=DEFAULT_FONT, size=15, color=(75, 75, 75)))
@@ -2229,8 +2230,8 @@ async def deckrec_update_data():
     for region in ALL_SERVER_REGIONS:
         try:
             ctx = SekaiHandlerContext.from_region(region)
-
             current_masterdata_version = await ctx.md.get_version()
+            musicmetas_json = get_musicmetas_json(ctx.region)
             current_musicmetas_update_ts = await musicmetas_json.get_update_time()
             logger.debug(f"组卡 {region} 当前 masterdata 版本: {current_masterdata_version} musicmetas 更新时间: {current_musicmetas_update_ts}")
 

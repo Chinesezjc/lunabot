@@ -76,7 +76,13 @@ deck:
     - url: http://127.0.0.1:45678
       weight: 8
 
-  music_meta_url: https://storage.sekai.best/sekai-best-assets/music_metas.json
+  music_meta_url: https://sekai-data.3-3.dev/music_metas.json
+  music_meta_urls:
+    jp: https://sekai-data.3-3.dev/music_metas.json
+    cn: https://sekai-data.3-3.dev/music_metas-cn.json
+    tw: https://sekai-data.3-3.dev/music_metas-tc.json 
+    en: https://sekai-data.3-3.dev/music_metas-en.json
+    kr: https://sekai-data.3-3.dev/music_metas-kr.json
   data_update_interval_seconds: 30
   default_algs: ['dfs', 'ga']
 

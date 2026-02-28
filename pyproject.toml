@@ -4,11 +4,22 @@ version = "0.1.0"
 description = "mybot"
 readme = "README.md"
 requires-python = ">=3.8, <4.0"
+dependencies = [
+    "nonebot2>=2.4.4",
+    "nonebot-adapter-onebot>=2.4.6",
+    "nonebot-plugin-apscheduler>=0.5.0",
+    "nonebot-plugin-picstatus>=2.2.2",
+]
 
 [tool.nonebot]
-adapters = [
-    { name = "OneBot V11", module_name = "nonebot.adapters.onebot.v11" }
-]
-plugins = ["nonebot_plugin_apscheduler", "nonebot_plugin_picstatus"]
 plugin_dirs = ["src/plugins"]
 builtin_plugins = []
+[tool.nonebot.plugins]
+"@local" = []
+nonebot-plugin-apscheduler = ["nonebot_plugin_apscheduler"]
+nonebot-plugin-picstatus = ["nonebot_plugin_picstatus"]
+
+
+[tool.nonebot.adapters]
+"@local" = []
+nonebot-adapter-onebot = [{name = "OneBot V11", module_name = "nonebot.adapters.onebot.v11"}]

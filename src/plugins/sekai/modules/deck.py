@@ -1045,8 +1045,8 @@ def add_omakase_music(music_metas: list[dict]) -> list[dict]:
         for difficulty in ('easy', 'normal', 'hard', 'expert', 'master', 'append'):
             new_omakase = omakase.copy()
             new_omakase['difficulty'] = difficulty
-            music_metas.append(new_omakase)
-    return music_metas
+            new_music_metas = music_metas + [new_omakase]
+    return new_music_metas
 
 # 获取deck的hash
 def get_deck_hash(deck: RecommendDeck) -> str:

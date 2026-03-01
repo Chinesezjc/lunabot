@@ -998,54 +998,68 @@ _deckrec_request_id = 0
 
 # 添加OMAKASE音乐
 def add_omakase_music(music_metas: list[dict]) -> list[dict]:
-    if find_by(music_metas, "id", OMAKASE_MUSIC_ID) is None:
-        omakase = {
-            "music_id": OMAKASE_MUSIC_ID,
-            "difficulty": None,
-            "music_time": 0.0,
-            "event_rate": 0.0,
-            "base_score": 0.0,
-            "base_score_auto": 0.0,
-            "skill_score_solo": [0.0 for _ in range(6)],
-            "skill_score_auto": [0.0 for _ in range(6)],
-            "skill_score_multi": [0.0 for _ in range(6)],
-            "fever_score": 0,
-            "fever_end_time": 0,
-            "tap_count": 0,
-        }
+    omakase_diffs = {
+        item.get('difficulty')
+        for item in music_metas
+        if item.get('music_id') == OMAKASE_MUSIC_ID
+    }
+    required_diffs = {'easy', 'normal', 'hard', 'expert', 'master', 'append'}
+    if required_diffs.issubset(omakase_diffs):
+        return music_metas
+    music_metas = [item for item in music_metas if item.get('music_id') != OMAKASE_MUSIC_ID]
 
-        music_count = 0
-        for item in music_metas:
-            if item['difficulty'] in OMAKASE_MUSIC_DIFFS:
-                omakase['music_time'] += item['music_time']
-                omakase['event_rate'] += item['event_rate']
-                omakase['base_score'] += item['base_score']
-                omakase['base_score_auto'] += item['base_score_auto']
-                for i in range(6):
-                    omakase['skill_score_solo'][i] += item['skill_score_solo'][i]
-                    omakase['skill_score_auto'][i] += item['skill_score_auto'][i]
-                    omakase['skill_score_multi'][i] += item['skill_score_multi'][i]
-                omakase['fever_score'] += item['fever_score']
-                omakase['fever_end_time'] += item['fever_end_time']
-                omakase['tap_count'] += item['tap_count']
-                music_count += 1
+    omakase = {
+        "music_id": OMAKASE_MUSIC_ID,
+        "difficulty": None,
+        "music_time": 0.0,
+        "event_rate": 0.0,
+        "base_score": 0.0,
+        "base_score_auto": 0.0,
+        "skill_score_solo": [0.0 for _ in range(6)],
+        "skill_score_auto": [0.0 for _ in range(6)],
+        "skill_score_multi": [0.0 for _ in range(6)],
+        "fever_score": 0,
+        "fever_end_time": 0,
+        "tap_count": 0,
+    }
 
-        omakase['music_time'] /= music_count
-        omakase['event_rate'] = int(omakase['event_rate'] / music_count)
-        omakase['base_score'] /= music_count
-        omakase['base_score_auto'] /= music_count
-        for i in range(6):
-            omakase['skill_score_solo'][i] /= music_count
-            omakase['skill_score_auto'][i] /= music_count
-            omakase['skill_score_multi'][i] /= music_count
-        omakase['fever_score'] /= music_count
-        omakase['fever_end_time'] /= music_count
-        omakase['tap_count'] = int(omakase['tap_count'] / music_count)
+    music_count = 0
+    for item in music_metas:
+        if item['difficulty'] in OMAKASE_MUSIC_DIFFS:
+            omakase['music_time'] += item['music_time']
+            omakase['event_rate'] += item['event_rate']
+            omakase['base_score'] += item['base_score']
+            omakase['base_score_auto'] += item['base_score_auto']
+            for i in range(6):
+                omakase['skill_score_solo'][i] += item['skill_score_solo'][i]
+                omakase['skill_score_auto'][i] += item['skill_score_auto'][i]
+                omakase['skill_score_multi'][i] += item['skill_score_multi'][i]
+            omakase['fever_score'] += item['fever_score']
+            omakase['fever_end_time'] += item['fever_end_time']
+            omakase['tap_count'] += item['tap_count']
+            music_count += 1
 
-        for difficulty in ('easy', 'normal', 'hard', 'expert', 'master', 'append'):
-            new_omakase = omakase.copy()
-            new_omakase['difficulty'] = difficulty
-            new_music_metas = music_metas + [new_omakase]
+    if music_count == 0:
+        return music_metas
+
+    omakase['music_time'] /= music_count
+    omakase['event_rate'] = int(omakase['event_rate'] / music_count)
+    omakase['base_score'] /= music_count
+    omakase['base_score_auto'] /= music_count
+    for i in range(6):
+        omakase['skill_score_solo'][i] /= music_count
+        omakase['skill_score_auto'][i] /= music_count
+        omakase['skill_score_multi'][i] /= music_count
+    omakase['fever_score'] /= music_count
+    omakase['fever_end_time'] /= music_count
+    omakase['tap_count'] = int(omakase['tap_count'] / music_count)
+
+    new_music_metas = list(music_metas)
+    for difficulty in ('easy', 'normal', 'hard', 'expert', 'master', 'append'):
+        new_omakase = omakase.copy()
+        new_omakase['difficulty'] = difficulty
+        new_music_metas.append(new_omakase)
+
     return new_music_metas
 
 # 获取deck的hash

@@ -1858,8 +1858,170 @@ async def get_chart_bpm(ctx: SekaiHandlerContext, mid: int, timeout: float=5.0):
         duration=duration,
     )
 
-# 合成best30图片
-async def compose_best30_image(ctx: SekaiHandlerContext, qid: int) -> Image.Image:
+# liveRecords-b30 排位分系数（百分比 -> 定数系数）
+LIVE_RECORD_B30_SCORE_COEFFS: list[tuple[float, float]] = [
+    (100.0, 1.000),
+    (99.5, 0.995),
+    (99.0, 0.990),
+    (98.0, 0.980),
+    (97.0, 0.970),
+    (95.0, 0.950),
+    (90.0, 0.900),
+    (0.0,  0.850),
+]
+
+def _safe_int(v: Any) -> Optional[int]:
+    try:
+        return int(v)
+    except Exception:
+        return None
+
+def _normalize_live_record_diff(diff: str | None) -> Optional[str]:
+    if not isinstance(diff, str):
+        return None
+    diff = diff.strip().lower()
+    for names in DIFF_NAMES:
+        for name in names:
+            if diff == name.lower():
+                return names[0]
+    return None
+
+def _get_live_record_rank_acc(perfect: int, great: int, good: int, bad: int, miss: int) -> tuple[float, int, int]:
+    total = perfect + great + good + bad + miss
+    max_score = total * 3
+    score = perfect * 3 + great * 2 + good
+    if max_score <= 0:
+        return 0.0, score, max_score
+    return score / max_score * 100.0, score, max_score
+
+def _get_live_record_rating_coeff(acc: float) -> float:
+    for threshold, coeff in LIVE_RECORD_B30_SCORE_COEFFS:
+        if acc >= threshold:
+            return coeff
+    return LIVE_RECORD_B30_SCORE_COEFFS[-1][1]
+
+def _is_live_record_better(new_item: dict, old_item: dict | None) -> bool:
+    if old_item is None:
+        return True
+    new_key = (new_item['rating'], new_item['rank_acc'], new_item['finish_at_ms'], -new_item['mid'])
+    old_key = (old_item['rating'], old_item['rank_acc'], old_item['finish_at_ms'], -old_item['mid'])
+    return new_key > old_key
+
+async def _get_live_records_best30_entries(ctx: SekaiHandlerContext, qid: int, limit: int = 5000) -> tuple[list[dict], dict]:
+    uid = get_player_bind_id(ctx, qid)
+    api_url = get_gameapi_config(ctx).live_records_api_url
+    assert_and_reply(
+        api_url,
+        f"当前{get_region_name(ctx.region)}未配置liveRecords接口，使用 /{ctx.region}pjsk b30 old 查询旧版B30",
+    )
+    req_url = api_url.format(uid=uid)
+    req_url += ('&' if '?' in req_url else '?') + f"limit={limit}&include_partial=false"
+    data = await request_gameapi(req_url)
+    records = data.get('records', []) if isinstance(data, dict) else []
+    assert_and_reply(isinstance(records, list), "liveRecords接口返回格式错误")
+    assert_and_reply(records, f"{get_region_name(ctx.region)}的liveRecords暂无可用数据")
+
+    constants = get_music_constants()
+    music_diff_infos: dict[int, MusicDiffInfo] = {}
+    best_by_chart: dict[tuple[int, str], dict] = {}
+    missing_is_auto_count = 0
+
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+
+        if 'isAuto' not in item:
+            missing_is_auto_count += 1
+        if item.get('isAuto', False):
+            continue
+
+        live_type = str(item.get('liveType') or 'single').strip().lower()
+        if live_type not in ('single', 'multi'):
+            continue
+
+        finish_at_ms = _safe_int(item.get('finishAtMs'))
+        if not finish_at_ms:
+            continue
+
+        mid = _safe_int(item.get('musicId'))
+        diff = _normalize_live_record_diff(item.get('difficulty'))
+        score = _safe_int(item.get('score'))
+        perfect = _safe_int(item.get('perfectCount'))
+        great = _safe_int(item.get('greatCount'))
+        good = _safe_int(item.get('goodCount'))
+        bad = _safe_int(item.get('badCount'))
+        miss = _safe_int(item.get('missCount'))
+        max_combo = _safe_int(item.get('maxCombo')) or 0
+
+        if None in (mid, diff, score, perfect, great, good, bad, miss):
+            continue
+
+        if mid not in music_diff_infos:
+            music_diff_infos[mid] = await get_music_diff_info(ctx, mid)
+        level = music_diff_infos[mid].level.get(diff, None)
+        if not level:
+            continue
+
+        if not await is_valid_music(ctx, mid, leak=False, diff=diff):
+            continue
+
+        music = await ctx.md.musics.find_by_id(mid)
+        if not music:
+            continue
+
+        rank_acc, rank_points, max_rank_points = _get_live_record_rank_acc(perfect, great, good, bad, miss)
+        if max_rank_points <= 0:
+            continue
+
+        coeff = _get_live_record_rating_coeff(rank_acc)
+        constant = float(constants.get((mid, diff), level))
+        constant_text = str(constants.get((mid, diff), f"{level}.?"))
+        rating = constant * coeff
+
+        note_count = music_diff_infos[mid].note_count.get(diff, None)
+        is_ap = great == 0 and good == 0 and bad == 0 and miss == 0 and perfect > 0
+        is_fc = (miss == 0 and max_combo >= note_count) if note_count else (miss == 0)
+        result_type = 'ap' if is_ap else ('fc' if is_fc else 'clear')
+
+        entry = {
+            'mid': mid,
+            'diff': diff,
+            'level': level,
+            'title': music['title'],
+            'rating': rating,
+            'constant_text': constant_text,
+            'result_type': result_type,
+            'result_text': 'AP' if is_ap else ('FC' if is_fc else 'CLEAR'),
+            'rank_acc': rank_acc,
+            'rank_points': rank_points,
+            'max_rank_points': max_rank_points,
+            'score': score,
+            'finish_at_ms': finish_at_ms,
+            'live_type': live_type,
+            'judge_text': f"P{perfect} G{great} Go{good} B{bad} M{miss}",
+        }
+
+        key = (mid, diff)
+        if _is_live_record_better(entry, best_by_chart.get(key)):
+            best_by_chart[key] = entry
+
+    entries = list(best_by_chart.values())
+    entries.sort(key=lambda x: (-x['rating'], -x['rank_acc'], -x['finish_at_ms'], x['mid']))
+    entries = entries[:30]
+
+    assert_and_reply(entries, "liveRecords中没有可用于计算B30的有效记录")
+    if missing_is_auto_count:
+        logger.warning(f"liveRecords中有 {missing_is_auto_count} 条记录缺少isAuto字段，暂按非Auto处理")
+
+    stats = {
+        'record_total': len(records),
+        'chart_total': len(best_by_chart),
+        'missing_is_auto': missing_is_auto_count,
+    }
+    return entries, stats
+
+# 合成best30图片（旧版）
+async def compose_best30_image_old(ctx: SekaiHandlerContext, qid: int) -> Image.Image:
     profile, err_msg = await get_detailed_profile(
         ctx, qid, 
         filter=get_detailed_profile_card_filter('userMusicResults'),
@@ -1952,6 +2114,93 @@ async def compose_best30_image(ctx: SekaiHandlerContext, qid: int) -> Image.Imag
    
     add_watermark(canvas)
     return await canvas.get_img()
+
+# 合成best30图片（新版，liveRecords）
+async def compose_best30_image_new(ctx: SekaiHandlerContext, qid: int) -> Image.Image:
+    with ProfileTimer('b30.new.get_data'):
+        constant_results, stats = await _get_live_records_best30_entries(ctx, qid)
+        total_num = len(constant_results)
+        user_rating = sum(cr['rating'] for cr in constant_results) / total_num
+
+    music_covers = await batch_gather(*[get_music_cover_thumb(ctx, cr['mid']) for cr in constant_results])
+    for cr, cover in zip(constant_results, music_covers):
+        cr['cover'] = cover
+
+    profile = None
+    try:
+        uid = int(get_player_bind_id(ctx, qid))
+        profile = await get_basic_profile(ctx, uid, raise_when_no_found=True)
+    except Exception as e:
+        logger.warning(f"绘制新版B30时获取基础档案失败: {get_exc_desc(e)}")
+
+    missing_num = max(0, 30 - total_num)
+    formula_text = "排位计分: P=3 G=2 Good=1 其他=0；系数: 100/99.5/99/98/97/95/90/else"
+    info_widget = get_music_constants_info_widget(additional_text=formula_text)
+
+    with Canvas(bg=SEKAI_BLUE_BG).set_padding(BG_PADDING) as canvas:
+        with VSplit().set_content_align('lt').set_item_align('lt').set_sep(16):
+            with HSplit().set_content_align('l').set_item_align('l').set_sep(16).set_item_bg(roundrect_bg()):
+                if profile:
+                    (await get_basic_profile_card(ctx, profile)).set_bg(None)
+                with VSplit().set_content_align('l').set_item_align('l').set_sep(8).set_padding(16):
+                    shadow_color = LinearGradient(PLAY_RESULT_COLORS['ap'], PLAY_RESULT_COLORS['fc'], (0, 0), (1, 1))
+                    style = TextStyle(DEFAULT_BOLD_FONT, 24, BLACK, use_shadow=True, shadow_color=shadow_color, shadow_offset=3)
+                    TextBox("Rating (LIVE_RECORDS)", style)
+                    TextBox(f"{user_rating:.2f}", style.replace(size=48))
+                    TextBox(
+                        f"B30覆盖: {total_num}/30 | 记录: {stats['record_total']} | 谱面: {stats['chart_total']}",
+                        TextStyle(DEFAULT_FONT, 18, BLACK),
+                    )
+                    if missing_num:
+                        TextBox(f"未满30: 还差 {missing_num} 首", TextStyle(DEFAULT_BOLD_FONT, 22, RED))
+                    if stats['missing_is_auto']:
+                        TextBox(
+                            f"警告: {stats['missing_is_auto']} 条记录缺少isAuto，按非Auto处理",
+                            TextStyle(DEFAULT_FONT, 16, (180, 120, 0)),
+                        )
+                if info_widget:
+                    info_widget.set_bg(None)
+
+            with Grid(col_count=2, hsep=16, vsep=16).set_item_bg(roundrect_bg()).set_content_align('lt').set_item_align('lt'):
+                for idx, cr in enumerate(constant_results, start=1):
+                    diff_color = DIFF_COLORS[cr['diff']]
+                    finish_text = datetime.fromtimestamp(cr['finish_at_ms'] / 1000).strftime('%m-%d %H:%M')
+                    with HSplit().set_content_align('l').set_item_align('c').set_sep(14).set_padding((16, 14)):
+                        with Frame().set_content_align('lt'):
+                            ImageBox(cr['cover'], size=(80, 80), shadow=True)
+                            TextBox(
+                                str(cr['level']),
+                                TextStyle(DEFAULT_BOLD_FONT, 18, WHITE),
+                                overflow='clip'
+                            ).set_bg(roundrect_bg(fill=diff_color, radius=16)).set_offset((-14, -14)).set_content_align('c').set_size((32, 32))
+
+                        with VSplit().set_content_align('l').set_item_align('l').set_sep(4):
+                            TextBox(f"#{idx} {cr['title']}", TextStyle(DEFAULT_BOLD_FONT, 22, BLACK), use_real_line_count=True).set_w(360)
+                            with HSplit().set_content_align('l').set_item_align('c').set_sep(8):
+                                TextBox(cr['constant_text'], TextStyle(DEFAULT_BOLD_FONT, 20, WHITE)).set_bg(roundrect_bg(fill=diff_color, radius=4)).set_padding(4)
+                                TextBox("→", TextStyle(DEFAULT_BOLD_FONT, 28, BLACK))
+                                TextBox(
+                                    f"{cr['rating']:.2f}",
+                                    TextStyle(DEFAULT_BOLD_FONT, 22, BLACK, use_shadow=True, shadow_color=PLAY_RESULT_COLORS[cr['result_type']], shadow_offset=2)
+                                )
+                                TextBox(cr['result_text'], TextStyle(DEFAULT_BOLD_FONT, 18, PLAY_RESULT_COLORS[cr['result_type']]))
+                            TextBox(
+                                f"达成 {cr['rank_acc']:.2f}% | 排位分 {cr['rank_points']}/{cr['max_rank_points']} | {cr['judge_text']}",
+                                TextStyle(DEFAULT_FONT, 16, (60, 60, 60)),
+                            ).set_w(380)
+                            TextBox(
+                                f"{finish_text}  {cr['live_type'].upper()}",
+                                TextStyle(DEFAULT_FONT, 15, (90, 90, 90)),
+                            )
+
+    add_watermark(canvas)
+    return await canvas.get_img()
+
+# 合成best30图片
+async def compose_best30_image(ctx: SekaiHandlerContext, qid: int, mode: str = "new") -> Image.Image:
+    if mode == "old":
+        return await compose_best30_image_old(ctx, qid)
+    return await compose_best30_image_new(ctx, qid)
 
 
 # ======================= 指令处理 ======================= #
@@ -2354,8 +2603,16 @@ pjsk_best30 = SekaiCmdHandler([
 pjsk_best30.check_cdrate(cd).check_wblist(gbl)
 @pjsk_best30.handle()
 async def _(ctx: SekaiHandlerContext):
+    args = ctx.get_args().strip().lower()
+    mode = "new"
+    if args:
+        parts = args.split()
+        if len(parts) != 1 or parts[0] not in ("new", "old"):
+            return await ctx.asend_reply_msg(f"使用方式:\n{ctx.original_trigger_cmd} [new|old]")
+        mode = parts[0]
+
     return await ctx.asend_reply_msg(await get_image_cq(
-        await compose_best30_image(ctx, ctx.user_id),
+        await compose_best30_image(ctx, ctx.user_id, mode=mode),
         low_quality=True,
     ))
 

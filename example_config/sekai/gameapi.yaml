@@ -2,6 +2,7 @@
 jp:
   profile_api_url:                "https://xxx/api/jp/user/{uid}/profile"       # 游戏API: 获取用户profile
   suite_api_url:                  "https://xxx/api/jp/user/{uid}/suite"         # 游戏API: 获取用户suite
+  live_records_api_url:           "https://xxx/api/jp/user/{uid}/live/records"  # 游戏API: 获取用户liveRecords
   mysekai_api_url:                "https://xxx/api/jp/user/{uid}/mysekai"       # 游戏API: 获取用户mysekai
   mysekai_photo_api_url:          "https://xxx/api/jp/mysekai/photo"            # 游戏API: 获取用户ms照片
   ranking_api_url:                "https://xxx/api/jp/event/{event_id}/ranking" # 游戏API: 获取活动排名
@@ -14,4 +15,5 @@ jp:
 
 # 台服（繁中）
 tw:
+  live_records_api_url:           "https://xxx/api/tw/user/{uid}/live/records"
   # ...

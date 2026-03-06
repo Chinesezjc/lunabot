@@ -675,8 +675,14 @@ Live类型: `单人` `多人` `auto`
 
 ### 查询best30
 `/pjsk b30` `/b30`
-> 查询自己的Best30列表，需要📡抓包数据  
+> 查询自己的Best30列表  
+默认使用新版（`liveRecords`数据源），支持参数切换：`new` `old`  
+`old` 模式为旧版抓包B30逻辑（FC/AP粗算）  
 支持服务器: `所有`  
+
+- `/pjsk b30` 默认新版（liveRecords）
+- `/pjsk b30 new` 显式使用新版
+- `/pjsk b30 old` 使用旧版
 
 
 ### 同步歌曲别名

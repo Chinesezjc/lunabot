@@ -9,6 +9,7 @@ class GameApiConfig:
     api_status_url: Optional[str] = None
     profile_api_url: Optional[str] = None 
     suite_api_url: Optional[str] = None
+    live_records_api_url: Optional[str] = None
     mysekai_api_url: Optional[str] = None  
     mysekai_photo_api_url: Optional[str] = None 
     mysekai_upload_time_api_url: Optional[str] = None 

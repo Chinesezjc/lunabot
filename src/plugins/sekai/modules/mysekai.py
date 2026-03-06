@@ -263,7 +263,7 @@ async def get_mysekai_and_detail_profile_card(ctx: SekaiHandlerContext, mysekai_
                     if ms_local_source := mysekai_info.get('local_source'):
                         ms_source += f"({ms_local_source})"
                     ms_update_time = datetime.fromtimestamp(mysekai_info['upload_time'] / 1000)
-                    ms_update_time_text = update_time.strftime('%m-%d %H:%M:%S') + f" ({get_readable_datetime(ms_update_time, show_original_time=False)})"
+                    ms_update_time_text = ms_update_time.strftime('%m-%d %H:%M:%S') + f" ({get_readable_datetime(ms_update_time, show_original_time=False)})"
 
                     with HSplit().set_content_align('lb').set_item_align('lb').set_sep(5):
                         hs = colored_text_box(

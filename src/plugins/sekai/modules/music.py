@@ -14,6 +14,7 @@ from .profile import (
     get_basic_profile,
     get_basic_profile_card,
     get_player_bind_id,
+    get_user_live_records,
 )
 from .event import extract_ban_event
 from .resbox import get_res_icon
@@ -651,31 +652,74 @@ async def search_music(ctx: SekaiHandlerContext, query: str, options: MusicSearc
 # ======================= 定数获取 ======================= #
 
 _music_constants: dict[tuple[int, str], float] = {}
-_music_constants_mtime: int = None
+_music_constants_cache_key: str | None = None
+_music_constants_update_time: int | None = None
+
+def _is_http_url(path: str) -> bool:
+    return path.startswith("http://") or path.startswith("https://")
+
+def _resolve_music_constants_columns(df: pd.DataFrame) -> tuple[str, str, str]:
+    column_map = {str(c).strip().lower(): c for c in df.columns}
+
+    def pick(*candidates: str) -> str | None:
+        for name in candidates:
+            key = name.strip().lower()
+            if key in column_map:
+                return column_map[key]
+        return None
+
+    id_col = pick("id", "song id", "song_id", "music id", "music_id", "musicid")
+    diff_col = pick("difficulty", "music difficulty", "music_difficulty", "musicdifficulty", "diff")
+    constant_col = pick("constant", "const", "定数")
+    if not all([id_col, diff_col, constant_col]):
+        raise Exception(f"定数表缺少必要列，当前列: {list(df.columns)}")
+    return id_col, diff_col, constant_col
 
 # 获取定数表
-def get_music_constants() -> dict[tuple[int, str], float]:
+async def get_music_constants() -> dict[tuple[int, str], float]:
     """
     获取定数表
     """
-    global _music_constants, _music_constants_mtime
+    global _music_constants, _music_constants_cache_key, _music_constants_update_time
     if not config.get('music.constant.enabled'):
         raise ReplyException("定数相关功能暂不可用")
     csv_path = config.get('music.constant.csv_path')
     if not csv_path:
         return {}
+    # 直接使用配置中的CSV地址/路径，不做URL normalize/改写
+    csv_source = str(csv_path).strip()
     try:
-        mtime = os.path.getmtime(csv_path)
-        if _music_constants_mtime is None or _music_constants_mtime != mtime:
-            df = pd.read_csv(csv_path)
+        if _is_http_url(csv_source):
+            reload_seconds = int(config.get('music.constant.remote_reload_seconds', 3600) or 3600)
+            reload_seconds = max(60, reload_seconds)
+            cache_bucket = int(time.time() // reload_seconds)
+            cache_key = f"url:{csv_source}:{cache_bucket}"
+            display_update_time = int(time.time())
+        else:
+            local_path = os.path.abspath(csv_source)
+            mtime = os.path.getmtime(local_path)
+            cache_key = f"file:{local_path}:{mtime}"
+            display_update_time = int(mtime)
+
+        if _music_constants_cache_key is None or _music_constants_cache_key != cache_key:
+            if _is_http_url(csv_source):
+                # 复用asset.py同系网络加载逻辑（aiohttp+重试+ssl兼容）拉取远程CSV到临时文件
+                remote_timeout = float(config.get('music.constant.remote_download_timeout', 15.0) or 15.0)
+                with TempFilePath('csv') as csv_tmp_path:
+                    await asyncio.wait_for(download_file(csv_source, csv_tmp_path), timeout=remote_timeout)
+                    df = await asyncio.wait_for(run_in_pool(pd.read_csv, csv_tmp_path), timeout=remote_timeout)
+            else:
+                df = pd.read_csv(csv_source)
+            id_col, diff_col, constant_col = _resolve_music_constants_columns(df)
             _music_constants = {}
             for _, row in df.iterrows():
-                mid = int(row['id'])
-                diff = row['difficulty'].lower()
-                constant = float(row['constant'])
+                mid = int(row[id_col])
+                diff = str(row[diff_col]).strip().lower()
+                constant = float(row[constant_col])
                 _music_constants[(mid, diff)] = constant
-            _music_constants_mtime = mtime
-            logger.info(f"成功加载歌曲定数数据，共 {len(_music_constants)} 条记录")
+            _music_constants_cache_key = cache_key
+            _music_constants_update_time = display_update_time
+            logger.info(f"成功加载歌曲定数数据，共 {len(_music_constants)} 条记录，来源: {csv_source}")
     except Exception as e:
         logger.print_exc(f"加载歌曲定数数据失败")
     return _music_constants
@@ -683,8 +727,8 @@ def get_music_constants() -> dict[tuple[int, str], float]:
 # 获取定数说明卡片
 def get_music_constants_info_widget(font_size: int = 20, padding: int = 16, additional_text = None) -> Widget | None:
     info_text = config.get('music.constant.info_text', "")
-    if _music_constants_mtime is not None:
-        info_text = f"定数更新时间: {datetime.fromtimestamp(_music_constants_mtime).strftime('%Y-%m-%d %H:%M')}\n" + info_text
+    if _music_constants_update_time is not None:
+        info_text = f"定数更新时间: {datetime.fromtimestamp(_music_constants_update_time).strftime('%Y-%m-%d %H:%M')}\n" + info_text
     if additional_text:
         info_text += "\n" + additional_text
     if not info_text:
@@ -1343,7 +1387,7 @@ async def compose_music_list_image(
                 await get_detailed_profile_card(ctx, profile, err_msg)
 
             if show_constant:
-                constants = get_music_constants()
+                constants = await get_music_constants()
                 get_music_constants_info_widget()
             else:
                 constants = {}
@@ -1908,39 +1952,56 @@ def _is_live_record_better(new_item: dict, old_item: dict | None) -> bool:
     return new_key > old_key
 
 async def _get_live_records_best30_entries(ctx: SekaiHandlerContext, qid: int, limit: int = 5000) -> tuple[list[dict], dict]:
-    uid = get_player_bind_id(ctx, qid)
-    api_url = get_gameapi_config(ctx).live_records_api_url
-    assert_and_reply(
-        api_url,
-        f"当前{get_region_name(ctx.region)}未配置liveRecords接口，使用 /{ctx.region}pjsk b30 old 查询旧版B30",
+    records = await get_user_live_records(
+        ctx,
+        qid=qid,
+        limit=limit,
+        include_partial=False,
+        raise_when_empty=True,
     )
-    req_url = api_url.format(uid=uid)
-    req_url += ('&' if '?' in req_url else '?') + f"limit={limit}&include_partial=false"
-    data = await request_gameapi(req_url)
-    records = data.get('records', []) if isinstance(data, dict) else []
-    assert_and_reply(isinstance(records, list), "liveRecords接口返回格式错误")
-    assert_and_reply(records, f"{get_region_name(ctx.region)}的liveRecords暂无可用数据")
 
-    constants = get_music_constants()
+    constants = await get_music_constants()
     music_diff_infos: dict[int, MusicDiffInfo] = {}
     best_by_chart: dict[tuple[int, str], dict] = {}
     missing_is_auto_count = 0
+    drop_reason_count: dict[str, int] = {}
+    drop_reason_samples: dict[str, list[dict]] = {}
+
+    def mark_drop(reason: str, item: Any):
+        drop_reason_count[reason] = drop_reason_count.get(reason, 0) + 1
+        if not isinstance(item, dict):
+            return
+        samples = drop_reason_samples.setdefault(reason, [])
+        if len(samples) >= 3:
+            return
+        samples.append({
+            'musicId': item.get('musicId'),
+            'difficulty': item.get('difficulty'),
+            'liveType': item.get('liveType'),
+            'isAuto': item.get('isAuto'),
+            'finishAtMs': item.get('finishAtMs'),
+            'score': item.get('score'),
+        })
 
     for item in records:
         if not isinstance(item, dict):
+            mark_drop('not_dict', item)
             continue
 
         if 'isAuto' not in item:
             missing_is_auto_count += 1
         if item.get('isAuto', False):
+            mark_drop('is_auto', item)
             continue
 
         live_type = str(item.get('liveType') or 'single').strip().lower()
         if live_type not in ('single', 'multi'):
+            mark_drop('invalid_live_type', item)
             continue
 
         finish_at_ms = _safe_int(item.get('finishAtMs'))
         if not finish_at_ms:
+            mark_drop('missing_finish_at_ms', item)
             continue
 
         mid = _safe_int(item.get('musicId'))
@@ -1954,23 +2015,28 @@ async def _get_live_records_best30_entries(ctx: SekaiHandlerContext, qid: int, l
         max_combo = _safe_int(item.get('maxCombo')) or 0
 
         if None in (mid, diff, score, perfect, great, good, bad, miss):
+            mark_drop('missing_required_fields', item)
             continue
 
         if mid not in music_diff_infos:
             music_diff_infos[mid] = await get_music_diff_info(ctx, mid)
         level = music_diff_infos[mid].level.get(diff, None)
         if not level:
+            mark_drop('missing_level_or_invalid_diff', item)
             continue
 
         if not await is_valid_music(ctx, mid, leak=False, diff=diff):
+            mark_drop('invalid_music', item)
             continue
 
         music = await ctx.md.musics.find_by_id(mid)
         if not music:
+            mark_drop('music_not_found', item)
             continue
 
         rank_acc, rank_points, max_rank_points = _get_live_record_rank_acc(perfect, great, good, bad, miss)
         if max_rank_points <= 0:
+            mark_drop('invalid_rank_points', item)
             continue
 
         coeff = _get_live_record_rating_coeff(rank_acc)
@@ -2009,6 +2075,17 @@ async def _get_live_records_best30_entries(ctx: SekaiHandlerContext, qid: int, l
     entries.sort(key=lambda x: (-x['rating'], -x['rank_acc'], -x['finish_at_ms'], x['mid']))
     entries = entries[:30]
 
+    logger.info(
+        f"liveRecords-B30筛选统计 region={ctx.region} qid={qid} "
+        f"raw={len(records)} chart_total={len(best_by_chart)} missing_is_auto={missing_is_auto_count} "
+        f"drop_reasons={drop_reason_count}"
+    )
+    if not entries:
+        logger.warning(
+            f"liveRecords-B30筛选结果为空 region={ctx.region} qid={qid} "
+            f"drop_reason_samples={drop_reason_samples}"
+        )
+
     assert_and_reply(entries, "liveRecords中没有可用于计算B30的有效记录")
     if missing_is_auto_count:
         logger.warning(f"liveRecords中有 {missing_is_auto_count} 条记录缺少isAuto字段，暂按非Auto处理")
@@ -2017,6 +2094,7 @@ async def _get_live_records_best30_entries(ctx: SekaiHandlerContext, qid: int, l
         'record_total': len(records),
         'chart_total': len(best_by_chart),
         'missing_is_auto': missing_is_auto_count,
+        'drop_reasons': drop_reason_count,
     }
     return entries, stats
 
@@ -2030,7 +2108,7 @@ async def compose_best30_image_old(ctx: SekaiHandlerContext, qid: int) -> Image.
 
     # 数据获取
     with ProfileTimer('b30.get_data'):
-        constants = get_music_constants()
+        constants = await get_music_constants()
         constant_results: list[dict] = []
 
         music_diff_infos: dict[int, MusicDiffInfo] = {}
@@ -2079,6 +2157,8 @@ async def compose_best30_image_old(ctx: SekaiHandlerContext, qid: int) -> Image.
     music_covers = await batch_gather(*[get_music_cover_thumb(ctx, cr['mid']) for cr in constant_results])
     for cr, cover in zip(constant_results, music_covers):
         cr['cover'] = cover
+
+    formula_text = "计算方式: 33及以上FC-1，以下-1.5，AP±0"
     
     # 绘图
     with Canvas(bg=SEKAI_BLUE_BG).set_padding(BG_PADDING) as canvas:
@@ -2090,7 +2170,7 @@ async def compose_best30_image_old(ctx: SekaiHandlerContext, qid: int) -> Image.
                     style = TextStyle(DEFAULT_BOLD_FONT, 24, BLACK, use_shadow=True, shadow_color=shadow_color, shadow_offset=3)
                     TextBox(f"Rating", style)
                     TextBox(f"{user_rating:.2f}", style.replace(size=48))
-                get_music_constants_info_widget(additional_text="计算方式: 33及以上FC-1，以下-1.5，AP±0").set_bg(None)
+                get_music_constants_info_widget(additional_text=formula_text).set_bg(None)
 
             with Grid(col_count=3, hsep=16, vsep=16).set_item_bg(roundrect_bg()).set_content_align('lt').set_content_align('lt'):
                 for cr in constant_results:
@@ -2109,7 +2189,7 @@ async def compose_best30_image_old(ctx: SekaiHandlerContext, qid: int) -> Image.
                                 TextBox(f"→", TextStyle(DEFAULT_BOLD_FONT, 32, BLACK))
                                 TextBox(f"{cr['rating']:.1f}", TextStyle(DEFAULT_BOLD_FONT, 24, BLACK, 
                                                                          use_shadow=True, shadow_color=PLAY_RESULT_COLORS[cr['result_type']], shadow_offset=2))
-                            play_result_img_path = "fc_text.png" if cr['result_type'] == 'fc' else "ap_text.png"
+                            play_result_img_path = "fc_text.svg" if cr['result_type'] == 'fc' else "ap_text.svg"
                             ImageBox(ctx.static_imgs.get(play_result_img_path), size=(None, 20), use_alphablend=True, shadow=True).set_padding((0, 2))
    
     add_watermark(canvas)
@@ -2134,8 +2214,7 @@ async def compose_best30_image_new(ctx: SekaiHandlerContext, qid: int) -> Image.
         logger.warning(f"绘制新版B30时获取基础档案失败: {get_exc_desc(e)}")
 
     missing_num = max(0, 30 - total_num)
-    formula_text = "排位计分: P=3 G=2 Good=1 其他=0；系数: 100/99.5/99/98/97/95/90/else"
-    info_widget = get_music_constants_info_widget(additional_text=formula_text)
+    formula_text = "排位计分: P=3 G=2 Good=1 其他=0"
 
     with Canvas(bg=SEKAI_BLUE_BG).set_padding(BG_PADDING) as canvas:
         with VSplit().set_content_align('lt').set_item_align('lt').set_sep(16):
@@ -2145,7 +2224,7 @@ async def compose_best30_image_new(ctx: SekaiHandlerContext, qid: int) -> Image.
                 with VSplit().set_content_align('l').set_item_align('l').set_sep(8).set_padding(16):
                     shadow_color = LinearGradient(PLAY_RESULT_COLORS['ap'], PLAY_RESULT_COLORS['fc'], (0, 0), (1, 1))
                     style = TextStyle(DEFAULT_BOLD_FONT, 24, BLACK, use_shadow=True, shadow_color=shadow_color, shadow_offset=3)
-                    TextBox("Rating (LIVE_RECORDS)", style)
+                    TextBox("Rating", style)
                     TextBox(f"{user_rating:.2f}", style.replace(size=48))
                     TextBox(
                         f"B30覆盖: {total_num}/30 | 记录: {stats['record_total']} | 谱面: {stats['chart_total']}",
@@ -2158,8 +2237,7 @@ async def compose_best30_image_new(ctx: SekaiHandlerContext, qid: int) -> Image.
                             f"警告: {stats['missing_is_auto']} 条记录缺少isAuto，按非Auto处理",
                             TextStyle(DEFAULT_FONT, 16, (180, 120, 0)),
                         )
-                if info_widget:
-                    info_widget.set_bg(None)
+                get_music_constants_info_widget(additional_text=formula_text).set_bg(None)
 
             with Grid(col_count=2, hsep=16, vsep=16).set_item_bg(roundrect_bg()).set_content_align('lt').set_item_align('lt'):
                 for idx, cr in enumerate(constant_results, start=1):
@@ -2183,7 +2261,14 @@ async def compose_best30_image_new(ctx: SekaiHandlerContext, qid: int) -> Image.
                                     f"{cr['rating']:.2f}",
                                     TextStyle(DEFAULT_BOLD_FONT, 22, BLACK, use_shadow=True, shadow_color=PLAY_RESULT_COLORS[cr['result_type']], shadow_offset=2)
                                 )
-                                TextBox(cr['result_text'], TextStyle(DEFAULT_BOLD_FONT, 18, PLAY_RESULT_COLORS[cr['result_type']]))
+                                if cr['result_type'] in ('ap', 'fc'):
+                                    play_result_img_path = "ap_text.svg" if cr['result_type'] == 'ap' else "fc_text.svg"
+                                    ImageBox(
+                                        ctx.static_imgs.get(play_result_img_path),
+                                        size=(None, 20),
+                                        use_alphablend=True,
+                                        shadow=True,
+                                    ).set_padding((0, 2))
                             TextBox(
                                 f"达成 {cr['rank_acc']:.2f}% | 排位分 {cr['rank_points']}/{cr['max_rank_points']} | {cr['judge_text']}",
                                 TextStyle(DEFAULT_FONT, 16, (60, 60, 60)),

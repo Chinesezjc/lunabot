@@ -530,6 +530,41 @@ async def get_basic_profile(ctx: SekaiHandlerContext, uid: int, use_cache=True, 
             return profile
         raise e
 
+# 根据游戏id获取玩家liveRecords
+async def get_user_live_records(
+    ctx: SekaiHandlerContext,
+    qid: int | None = None,
+    uid: int | str | None = None,
+    limit: int = 5000,
+    include_partial: bool = False,
+    raise_when_empty: bool = True,
+) -> list[dict]:
+    if uid is None:
+        uid = get_player_bind_id(ctx, qid)
+    uid = str(uid)
+
+    region_name = get_region_name(ctx.region)
+    api_url = get_gameapi_config(ctx).live_records_api_url
+    assert_and_reply(
+        api_url,
+        f"当前{region_name}未配置liveRecords接口，使用 /{ctx.region}pjsk b30 old 查询旧版B30",
+    )
+
+    try:
+        limit = max(1, int(limit))
+    except Exception:
+        limit = 5000
+
+    req_url = api_url.format(uid=uid)
+    req_url += ('&' if '?' in req_url else '?') + f"limit={limit}&include_partial={'true' if include_partial else 'false'}"
+
+    data = await request_gameapi(req_url)
+    records = data.get('records', []) if isinstance(data, dict) else []
+    assert_and_reply(isinstance(records, list), "liveRecords接口返回格式错误")
+    if raise_when_empty:
+        assert_and_reply(records, f"{region_name}的liveRecords暂无可用数据")
+    return records
+
 # 获取玩家基本信息的简单卡片控件，返回Frame
 async def get_basic_profile_card(ctx: SekaiHandlerContext, profile: dict) -> Frame:
     with Frame().set_bg(roundrect_bg()).set_padding(16) as f:

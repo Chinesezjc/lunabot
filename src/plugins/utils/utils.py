@@ -275,7 +275,7 @@ _global_client_session: Optional[aiohttp.ClientSession] = None
 def get_client_session() -> aiohttp.ClientSession:
     global _global_client_session
     if _global_client_session is None or _global_client_session.closed:
-        _global_client_session = aiohttp.ClientSession()
+        _global_client_session = aiohttp.ClientSession(trust_env=True)
     return _global_client_session
 
 @on_shutdown()

@@ -257,5 +257,6 @@ music:
   constant:
     enabled: true # 禁用后使用相关功能会直接提示不可用
     csv_path: ""  # 歌曲定数csv路径，需包含 id,difficulty,constant 三列
+    remote_download_timeout: 15.0  # 远程下载超时（秒）
     info_text: |
       该bot的定数表未配置

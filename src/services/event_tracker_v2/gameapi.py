@@ -24,6 +24,7 @@ class GameApiConfig:
     api_status_url: Optional[str] = None
     profile_api_url: Optional[str] = None 
     suite_api_url: Optional[str] = None
+    live_records_api_url: Optional[str] = None
     mysekai_api_url: Optional[str] = None  
     mysekai_photo_api_url: Optional[str] = None 
     mysekai_upload_time_api_url: Optional[str] = None 
@@ -73,5 +74,3 @@ async def request_gameapi(url: str, method: str = 'GET', data_type: str | None =
                 
     except ClientConnectionError as e:
         raise Exception(f"连接游戏API后端失败")
-
-

@@ -1963,7 +1963,6 @@ async def _get_live_records_best30_entries(ctx: SekaiHandlerContext, qid: int, l
     constants = await get_music_constants()
     music_diff_infos: dict[int, MusicDiffInfo] = {}
     best_by_chart: dict[tuple[int, str], dict] = {}
-    missing_is_auto_count = 0
     drop_reason_count: dict[str, int] = {}
     drop_reason_samples: dict[str, list[dict]] = {}
 
@@ -1988,14 +1987,22 @@ async def _get_live_records_best30_entries(ctx: SekaiHandlerContext, qid: int, l
             mark_drop('not_dict', item)
             continue
 
-        if 'isAuto' not in item:
-            missing_is_auto_count += 1
-        if item.get('isAuto', False):
-            mark_drop('is_auto', item)
+        # 新接口: liveType in {auto, solo, multi}
+        # 兼容旧接口: liveType in {single, multi} + isAuto
+        raw_live_type = str(item.get('liveType') or '').strip().lower()
+        if raw_live_type in ('solo', 'single'):
+            live_type = 'solo'
+        elif raw_live_type == 'multi':
+            live_type = 'multi'
+        elif raw_live_type == 'auto':
+            mark_drop('auto_live_type', item)
             continue
-
-        live_type = str(item.get('liveType') or 'single').strip().lower()
-        if live_type not in ('single', 'multi'):
+        elif 'isAuto' in item:
+            if item.get('isAuto', False):
+                mark_drop('auto_is_auto', item)
+                continue
+            live_type = 'solo'
+        else:
             mark_drop('invalid_live_type', item)
             continue
 
@@ -2077,8 +2084,7 @@ async def _get_live_records_best30_entries(ctx: SekaiHandlerContext, qid: int, l
 
     logger.info(
         f"liveRecords-B30筛选统计 region={ctx.region} qid={qid} "
-        f"raw={len(records)} chart_total={len(best_by_chart)} missing_is_auto={missing_is_auto_count} "
-        f"drop_reasons={drop_reason_count}"
+        f"raw={len(records)} chart_total={len(best_by_chart)} drop_reasons={drop_reason_count}"
     )
     if not entries:
         logger.warning(
@@ -2087,13 +2093,10 @@ async def _get_live_records_best30_entries(ctx: SekaiHandlerContext, qid: int, l
         )
 
     assert_and_reply(entries, "liveRecords中没有可用于计算B30的有效记录")
-    if missing_is_auto_count:
-        logger.warning(f"liveRecords中有 {missing_is_auto_count} 条记录缺少isAuto字段，暂按非Auto处理")
 
     stats = {
         'record_total': len(records),
         'chart_total': len(best_by_chart),
-        'missing_is_auto': missing_is_auto_count,
         'drop_reasons': drop_reason_count,
     }
     return entries, stats
@@ -2216,6 +2219,9 @@ async def compose_best30_image_new(ctx: SekaiHandlerContext, qid: int) -> Image.
 
     missing_num = max(0, 30 - total_num)
     formula_text = "排位计分: P=3 G=2 Good=1 其他=0"
+    # 每行2列时增大单卡宽度，避免整体右侧留白过多
+    b30_item_text_w = 507
+    b30_item_w = 80 + 14 + b30_item_text_w + 16 * 2
 
     with Canvas(bg=SEKAI_BLUE_BG).set_padding(BG_PADDING) as canvas:
         with VSplit().set_content_align('lt').set_item_align('lt').set_sep(16):
@@ -2233,18 +2239,13 @@ async def compose_best30_image_new(ctx: SekaiHandlerContext, qid: int) -> Image.
                     )
                     if missing_num:
                         TextBox(f"未满30: 还差 {missing_num} 首", TextStyle(DEFAULT_BOLD_FONT, 22, RED))
-                    if stats['missing_is_auto']:
-                        TextBox(
-                            f"警告: {stats['missing_is_auto']} 条记录缺少isAuto，按非Auto处理",
-                            TextStyle(DEFAULT_FONT, 16, (180, 120, 0)),
-                        )
                 get_music_constants_info_widget(additional_text=formula_text).set_bg(None)
 
             with Grid(col_count=2, hsep=16, vsep=16).set_item_bg(roundrect_bg()).set_content_align('lt').set_item_align('lt'):
                 for idx, cr in enumerate(constant_results, start=1):
                     diff_color = DIFF_COLORS[cr['diff']]
                     finish_text = datetime.fromtimestamp(cr['finish_at_ms'] / 1000).strftime('%m-%d %H:%M')
-                    with HSplit().set_content_align('l').set_item_align('c').set_sep(14).set_padding((16, 14)):
+                    with HSplit().set_content_align('l').set_item_align('c').set_sep(14).set_padding((16, 14)).set_w(b30_item_w):
                         with Frame().set_content_align('lt'):
                             ImageBox(cr['cover'], size=(80, 80), shadow=True)
                             TextBox(
@@ -2254,7 +2255,7 @@ async def compose_best30_image_new(ctx: SekaiHandlerContext, qid: int) -> Image.
                             ).set_bg(roundrect_bg(fill=diff_color, radius=16)).set_offset((-14, -14)).set_content_align('c').set_size((32, 32))
 
                         with VSplit().set_content_align('l').set_item_align('l').set_sep(4):
-                            TextBox(f"#{idx} {cr['title']}", TextStyle(DEFAULT_BOLD_FONT, 22, BLACK), use_real_line_count=True).set_w(360)
+                            TextBox(f"#{idx} {cr['title']}", TextStyle(DEFAULT_BOLD_FONT, 22, BLACK), use_real_line_count=True).set_w(b30_item_text_w)
                             with HSplit().set_content_align('l').set_item_align('c').set_sep(8):
                                 TextBox(cr['constant_text'], TextStyle(DEFAULT_BOLD_FONT, 20, WHITE)).set_bg(roundrect_bg(fill=diff_color, radius=4)).set_padding(4)
                                 TextBox("→", TextStyle(DEFAULT_BOLD_FONT, 28, BLACK))
@@ -2273,11 +2274,11 @@ async def compose_best30_image_new(ctx: SekaiHandlerContext, qid: int) -> Image.
                             TextBox(
                                 f"达成 {cr['rank_acc']:.2f}% | 排位分 {cr['rank_points']}/{cr['max_rank_points']} | {cr['judge_text']}",
                                 TextStyle(DEFAULT_FONT, 16, (60, 60, 60)),
-                            ).set_w(380)
+                            ).set_w(b30_item_text_w)
                             TextBox(
                                 f"{finish_text}  {cr['live_type'].upper()}",
                                 TextStyle(DEFAULT_FONT, 15, (90, 90, 90)),
-                            )
+                            ).set_w(b30_item_text_w)
 
     add_watermark(canvas)
     return await canvas.get_img()

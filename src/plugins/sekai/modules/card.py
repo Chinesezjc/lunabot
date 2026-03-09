@@ -714,7 +714,7 @@ import math
 
 async def compose_createdAt_image(ctx: SekaiHandlerContext, qid: int, cards: dict, show_id: bool, use_after_training=True, group_by_year=False):
     profile, pmsg = await get_detailed_profile(ctx, qid, filter=get_detailed_profile_card_filter('userCards'), raise_exc=True)
-    pcards = profile['userCards'] if profile else []
+    pcards = profile.userCards if profile else []
     
     owned_cards = []
     for card in cards:

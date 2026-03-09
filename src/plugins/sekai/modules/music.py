@@ -1374,7 +1374,7 @@ async def compose_music_list_image(
 
     if profile:
         music_results: dict[tuple[int, str], list] = {}
-        for result in profile.get('userMusicResults', []):
+        for result in profile.userMusicResults:
             mid = result['musicId']
             result_diff = result.get('musicDifficultyType') or result.get('musicDifficulty')
             if result_diff != diff:
@@ -1462,7 +1462,7 @@ async def compose_play_progress_image(ctx: SekaiHandlerContext, diff: str, qid: 
     count = { lv: PlayProgressCount() for lv in range(1, 40) }
 
     music_results: dict[tuple[int, str], list] = {}
-    for result in profile.get('userMusicResults', []):
+    for result in profile.userMusicResults:
         mid = result['musicId']
         result_diff = result.get('musicDifficultyType') or result.get('musicDifficulty')
         if result_diff != diff:
@@ -1703,7 +1703,7 @@ async def compose_music_rewards_image(ctx: SekaiHandlerContext, qid: int) -> Ima
         # 按照歌曲分组
         umas: Dict[int, List[int]] = { mid: [] for mid in mids }
         # 按照歌曲id分组
-        for item in profile['userMusicAchievements']:
+        for item in profile.userMusicAchievements:
             if item['musicId'] in umas:
                 umas[item['musicId']].append(item['musicAchievementId'])
         # 乐曲评级奖励
@@ -2113,7 +2113,7 @@ async def compose_best30_image_old(ctx: SekaiHandlerContext, qid: int) -> Image.
 
         music_diff_infos: dict[int, MusicDiffInfo] = {}
         music_results: dict[tuple[int, str], list] = {}
-        for result in profile.get('userMusicResults', []):
+        for result in profile.userMusicResults:
             mid = result['musicId']
             diff = result.get('musicDifficultyType') or result.get('musicDifficulty')
             music_results.setdefault((mid, diff), []).append(result)

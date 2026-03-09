@@ -3,6 +3,7 @@ from ..common import *
 from ..handler import *
 from ..asset import *
 from ..draw import *
+from ..suite import Suite
 from .resbox import get_res_box_info, get_res_icon
 from .profile import (
     get_detailed_profile,
@@ -33,11 +34,11 @@ UNIT_SEKAI_AREA_IDS = {
 # ======================= 处理逻辑 ======================= #
 
 # 获取玩家挑战live信息，返回（rank, score, remain_jewel, remain_fragment）
-async def get_user_challenge_live_info(ctx: SekaiHandlerContext, profile: dict) -> Dict[int, Tuple[int, int, int, int]]:
+async def get_user_challenge_live_info(ctx: SekaiHandlerContext, profile: Suite) -> Dict[int, Tuple[int, int, int, int]]:
     challenge_info = {}
-    challenge_results = profile['userChallengeLiveSoloResults']
-    challenge_stages = profile['userChallengeLiveSoloStages']
-    challenge_rewards = profile['userChallengeLiveSoloHighScoreRewards']
+    challenge_results = profile.userChallengeLiveSoloResults
+    challenge_stages = profile.userChallengeLiveSoloStages
+    challenge_rewards = profile.userChallengeLiveSoloHighScoreRewards
     for cid in range(1, 27):
         stages = find_by(challenge_stages, 'characterId', cid, mode='all')
         rank = max([stage['rank'] for stage in stages]) if stages else 0
@@ -135,10 +136,10 @@ async def compose_challenge_live_detail_image(ctx: SekaiHandlerContext, qid: int
     return await canvas.get_img()
 
 # 获取玩家加成信息
-async def get_user_power_bonus(ctx: SekaiHandlerContext, profile: dict) -> Dict[str, int]:
+async def get_user_power_bonus(ctx: SekaiHandlerContext, profile: Suite) -> Dict[str, int]:
     # 获取区域道具
     area_items: List[dict] = []
-    for user_area in profile['userAreas']:
+    for user_area in profile.userAreas:
         for user_area_item in user_area.get('areaItems', []):
             item_id = user_area_item['areaItemId']
             lv = user_area_item['level']
@@ -153,10 +154,10 @@ async def get_user_power_bonus(ctx: SekaiHandlerContext, profile: dict) -> Dict[
     for item in area_items:
         if item.get('targetGameCharacterId', "any") != "any":
             chara_bonus[item['targetGameCharacterId']]['area_item'] += item['power1BonusRate']
-    for chara in profile['userCharacters']:
+    for chara in profile.userCharacters:
         rank = find_by(await ctx.md.character_ranks.find_by('characterId', chara['characterId'], mode='all'), 'characterRank', chara['characterRank'])
         chara_bonus[chara['characterId']]['rank'] += rank['power1BonusRate']
-    for fb in profile.get('userMysekaiFixtureGameCharacterPerformanceBonuses', []):
+    for fb in profile.userMysekaiFixtureGameCharacterPerformanceBonuses:
         chara_bonus[fb['gameCharacterId']]['fixture'] += fb['totalBonusRate'] * 0.1
     
     # 组合加成 = 区域道具 + 烤森门
@@ -168,7 +169,7 @@ async def get_user_power_bonus(ctx: SekaiHandlerContext, profile: dict) -> Dict[
         if item.get('targetUnit', "any") != "any":
             unit_bonus[item['targetUnit']]['area_item'] += item['power1BonusRate']
     max_bonus = 0
-    for gate in profile.get('userMysekaiGates', []):
+    for gate in profile.userMysekaiGates:
         gate_id = gate['mysekaiGateId']
         bonus = find_by(await ctx.md.mysekai_gate_levels.find_by('mysekaiGateId', gate_id, mode='all'), 'level', gate['mysekaiGateLevel'])
         unit_bonus[UNITS[gate_id - 1]]['gate'] += bonus['powerBonusRate']
@@ -266,14 +267,14 @@ async def compose_area_item_upgrade_materials_image(ctx: SekaiHandlerContext, qi
     
     if profile:
         # 获取玩家材料（金币当作id=-1的材料）
-        assert_and_reply('userMaterials' in profile, "你的Suite数据来源没有提供userMaterials数据（可能需要重传）")
+        assert_and_reply(profile.has_field('userMaterials'), "你的Suite数据来源没有提供userMaterials数据（可能需要重传）")
         user_materials = {}
-        user_materials[COIN_ID] = profile['userGamedata'].get('coin', 0)
-        for item in profile.get('userMaterials', []):
+        user_materials[COIN_ID] = profile.userGamedata.get('coin', 0)
+        for item in profile.userMaterials:
             user_materials[item['materialId']] = item['quantity']
         # 获取玩家区域道具等级
         user_area_item_lvs = {}
-        for area in profile.get('userAreas', []):
+        for area in profile.userAreas:
             for area_item in area.get('areaItems', []):
                 user_area_item_lvs[area_item['areaItemId']] = area_item['level']
 
@@ -463,7 +464,7 @@ async def compose_bonds_image(ctx: SekaiHandlerContext, qid: int, cid: int | Non
         filter=get_detailed_profile_card_filter('userBonds', 'userCharacters'),
         raise_exc=True)
     
-    user_bonds = profile.get('userBonds')
+    user_bonds = profile.userBonds
     assert_and_reply(user_bonds, "你的Suite数据来源没有提供userBonds数据")
 
     def extract_cid_from_bgid(bgid: int) -> tuple[int, int]:
@@ -490,7 +491,7 @@ async def compose_bonds_image(ctx: SekaiHandlerContext, qid: int, cid: int | Non
 
     # 收集用户的角色等级
     character_ranks = {}
-    for item in profile.get('userCharacters', []):
+    for item in profile.userCharacters:
         character_ranks[item['characterId']] = item['characterRank']
 
     if cid is not None:
@@ -607,8 +608,8 @@ async def compose_leader_count_image(ctx: SekaiHandlerContext, qid: int) -> Imag
         filter=get_detailed_profile_card_filter('userCharacterMissionV2s', 'userCharacterMissionV2Statuses'),
         raise_exc=True)
 
-    ucms = profile.get('userCharacterMissionV2s')
-    ucm_ss = profile.get('userCharacterMissionV2Statuses')
+    ucms = profile.userCharacterMissionV2s
+    ucm_ss = profile.userCharacterMissionV2Statuses
     assert_and_reply(ucms, "你的Suite数据来源没有提供userCharacterMissionV2s数据")
     assert_and_reply(ucm_ss, "你的Suite数据来源没有提供userCharacterMissionV2Statuses数据")
 
@@ -834,4 +835,3 @@ async def _(ctx: SekaiHandlerContext):
         await compose_leader_count_image(ctx, ctx.user_id),
         low_quality=True,
     ))
-

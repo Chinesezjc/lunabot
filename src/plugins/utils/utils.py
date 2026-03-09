@@ -1,6 +1,9 @@
 from ..common.config import *
 from datetime import datetime, timedelta, timezone
 
+_memray_tracker = None
+_memray_save_path = ""
+
 # ============================ 启动时性能分析 ============================ #
 
 if _profile_at_startup := global_config.get('profile_at_starup.enable'):
@@ -12,13 +15,19 @@ if _profile_at_startup := global_config.get('profile_at_starup.enable'):
     print(f"启动时性能分析已开启 (clocktype={_profile_at_startup_clock_type}, seconds={_profile_at_startup_seconds})", flush=True)
 
 if _memray_at_startup := global_config.get('memray_at_startup.enable'):
-    from memray import Tracker
     _memray_at_startup_seconds = global_config.get('memray_at_startup.seconds')
-    _memray_save_path = f"data/misc/memray/{datetime.now().strftime('%Y%m%d_%H%M%S')}_memray.bin"
-    os.makedirs(osp.dirname(_memray_save_path), exist_ok=True)
-    _memray_tracker = Tracker(_memray_save_path, native_traces=True)
-    _memray_tracker.__enter__()
-    print(f"启动时内存分析已开启 (seconds={_memray_at_startup_seconds})", flush=True)
+    try:
+        import importlib
+        Tracker = getattr(importlib.import_module("memray"), "Tracker")
+    except Exception as e:
+        _memray_at_startup = False
+        print(f"启动时内存分析未开启: {e}", flush=True)
+    else:
+        _memray_save_path = f"data/misc/memray/{datetime.now().strftime('%Y%m%d_%H%M%S')}_memray.bin"
+        os.makedirs(osp.dirname(_memray_save_path), exist_ok=True)
+        _memray_tracker = Tracker(_memray_save_path, native_traces=True)
+        _memray_tracker.__enter__()
+        print(f"启动时内存分析已开启 (seconds={_memray_at_startup_seconds})", flush=True)
 
 
 # ============================ 模块导入 ============================ #
@@ -45,6 +54,7 @@ import math
 import io
 import time
 import zstandard
+import sys
 
 import faulthandler
 faulthandler.enable()
@@ -412,6 +422,182 @@ async def batch_gather(*futs_or_coros, batch_size=32) -> List[Any]:
         results.extend(await asyncio.gather(*futs_or_coros[i:i + batch_size]))
     return results
 
+
+def _format_progress_bar(done: int, total: int, width: int = 24) -> str:
+    if total <= 0:
+        return "[" + "-" * width + "]"
+    filled = int(width * done / total)
+    filled = max(0, min(width, filled))
+    return "[" + "#" * filled + "-" * (width - filled) + "]"
+
+
+class ProgressTqdm:
+    """
+    轻量级 tqdm 风格进度条：
+    - TTY 下默认单行刷新
+    - journald/systemd 下默认多行 logger 输出
+    - 支持环境变量强制模式：
+      LUNABOT_PROGRESS_SINGLE_LINE_MODE / SEKAI_PROGRESS_SINGLE_LINE_MODE
+      取值: always|never|auto
+    """
+    def __init__(
+        self,
+        total: int,
+        desc: str = "任务进度",
+        progress_logger: Logger | None = None,
+        log_percent_step: int = 5,
+        log_interval_sec: float = 2.0,
+        single_line: bool | None = None,
+        bar_width: int = 24,
+    ):
+        self.total = max(0, int(total))
+        self.desc = desc
+        self.progress_logger = progress_logger or utils_logger
+        self.log_percent_step = max(1, int(log_percent_step))
+        self.log_interval_sec = max(0.2, float(log_interval_sec))
+        self.bar_width = max(8, int(bar_width))
+
+        self.single_line = self._resolve_single_line(single_line)
+        self.start_time = time.time()
+        self.last_log_time = 0.0
+        self.next_percent = 0
+        self.done = 0
+        self.last_inline_len = 0
+        self.closed = False
+
+        self._render(force=True)
+
+    @staticmethod
+    def _resolve_single_line(single_line: bool | None) -> bool:
+        if isinstance(single_line, bool):
+            return single_line
+
+        force_mode = (
+            str(
+                os.getenv("LUNABOT_PROGRESS_SINGLE_LINE_MODE")
+                or os.getenv("SEKAI_PROGRESS_SINGLE_LINE_MODE")
+                or "auto"
+            )
+            .strip()
+            .lower()
+        )
+        if force_mode in ("always", "force", "true", "1", "yes", "on"):
+            return True
+        if force_mode in ("never", "false", "0", "no", "off"):
+            return False
+        return bool(getattr(sys.stdout, "isatty", lambda: False)())
+
+    def _should_render(self, force: bool) -> bool:
+        if self.closed:
+            return False
+        if force:
+            return True
+        now = time.time()
+        percent = 100 if self.total <= 0 else int(self.done * 100 / self.total)
+        return percent >= self.next_percent or (now - self.last_log_time) >= self.log_interval_sec
+
+    def _format_line(self) -> str:
+        now = time.time()
+        elapsed = max(now - self.start_time, 1e-6)
+        percent = 100 if self.total <= 0 else int(self.done * 100 / self.total)
+        speed = self.done / elapsed
+        remain = max(self.total - self.done, 0)
+        eta = remain / speed if speed > 1e-6 else 0.0
+        bar = _format_progress_bar(self.done, self.total, self.bar_width)
+        return f"{self.desc} {bar} {self.done}/{self.total} ({percent}%) speed={speed:.1f}/s eta={eta:.1f}s"
+
+    def _emit(self, text: str, finish: bool = False):
+        if self.single_line:
+            pad = max(0, self.last_inline_len - len(text))
+            sys.stdout.write("\r\033[K" + text + (" " * pad))
+            if finish:
+                sys.stdout.write("\n")
+            sys.stdout.flush()
+            self.last_inline_len = len(text)
+        else:
+            self.progress_logger.info(text)
+
+    def _render(self, force: bool = False, finish: bool = False):
+        if not self._should_render(force):
+            return
+        text = self._format_line()
+        self._emit(text, finish=finish and self.single_line)
+        now = time.time()
+        percent = 100 if self.total <= 0 else int(self.done * 100 / self.total)
+        self.next_percent = ((percent // self.log_percent_step) + 1) * self.log_percent_step
+        self.last_log_time = now
+
+    def update(self, n: int = 1):
+        if self.closed:
+            return
+        self.done = min(self.total, self.done + int(n))
+        self._render()
+
+    def fail(self):
+        if self.closed:
+            return
+        self._render(force=True)
+        if self.single_line:
+            self._emit(f"{self.desc} [FAILED] {self.done}/{self.total}", finish=True)
+        else:
+            self.progress_logger.warning(f"{self.desc} 失败 {self.done}/{self.total}")
+        self.closed = True
+
+    def close(self):
+        if self.closed:
+            return
+        self.done = self.total
+        self._render(force=True, finish=True)
+        self.closed = True
+
+
+async def batch_gather_with_progress(
+    *futs_or_coros,
+    batch_size: int = 32,
+    progress_name: str = "任务进度",
+    progress_logger: Logger | None = None,
+    log_percent_step: int = 5,
+    log_interval_sec: float = 2.0,
+    single_line: bool | None = None,
+) -> List[Any]:
+    """
+    带 tqdm 风格日志进度条的批量异步执行。
+    """
+    total = len(futs_or_coros)
+    if total == 0:
+        return []
+
+    results = [None] * total
+    pbar = ProgressTqdm(
+        total=total,
+        desc=progress_name,
+        progress_logger=progress_logger,
+        log_percent_step=log_percent_step,
+        log_interval_sec=log_interval_sec,
+        single_line=single_line,
+    )
+
+    async def _wrap(index: int, fut_or_coro):
+        return index, await fut_or_coro
+
+    for i in range(0, total, batch_size):
+        batch = futs_or_coros[i:i + batch_size]
+        tasks = [asyncio.create_task(_wrap(i + j, coro)) for j, coro in enumerate(batch)]
+        try:
+            for task in asyncio.as_completed(tasks):
+                index, value = await task
+                results[index] = value
+                pbar.update(1)
+        except Exception:
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+            pbar.fail()
+            raise
+
+    pbar.close()
+    return results
+
 # 启动时_pending_start_tasks
 @scheduler.scheduled_job('date', run_date=datetime.now(), misfire_grace_time=60)
 async def _create_pending_startup_tasks():
@@ -433,13 +619,20 @@ async def call_common_or_async(func: Callable, *args, **kwargs):
 
 from zhon import hanzi
 _clean_name_pattern = rf"[{re.escape(hanzi.punctuation)}\s]"
+_zhconv_missing_logged = False
 def clean_name(s: str) -> str:
     """
     获取用于搜索匹配的干净字符串
     """
+    global _zhconv_missing_logged
     s = re.sub(_clean_name_pattern, "", s).lower()
-    import zhconv
-    s = zhconv.convert(s, 'zh-cn')
+    try:
+        import zhconv
+        s = zhconv.convert(s, 'zh-cn')
+    except ModuleNotFoundError:
+        if not _zhconv_missing_logged:
+            utils_logger.warning("未安装 zhconv，clean_name 将跳过繁简转换")
+            _zhconv_missing_logged = True
     return s
 
 def get_md5(s: Union[str, bytes]) -> str:

@@ -3,6 +3,7 @@ from ...llm import translate_text, ChatSession, get_model_preset, ChatSessionRes
 from ..common import *
 from ..handler import *
 from ..asset import *
+from ..costume3d import Costume3D
 from ..draw import *
 from .profile import (
     get_detailed_profile, 
@@ -247,7 +248,7 @@ async def compose_card_list_image(ctx: SekaiHandlerContext, cards: List[Dict], q
     if qid:
         profile, pmsg = await get_detailed_profile(ctx, qid, filter=get_detailed_profile_card_filter('userCards'), raise_exc=True)
         if profile:
-            box_card_ids = set([uc['cardId'] for uc in profile['userCards']])
+            box_card_ids = set([uc['cardId'] for uc in profile.userCards])
             cards = [c for c in cards if c['id'] in box_card_ids]
 
     assert_and_reply(len(cards) > 0,    f"找不到符合条件的卡牌")
@@ -259,7 +260,7 @@ async def compose_card_list_image(ctx: SekaiHandlerContext, cards: List[Dict], q
     async def get_thumb_nothrow(card):
         try: 
             if qid:
-                pcard = find_by(profile['userCards'], "cardId", card['id'])
+                pcard = find_by(profile.userCards, "cardId", card['id'])
                 img = await get_card_full_thumbnail(ctx, card, pcard=pcard)
                 return img, None
             normal = await get_card_full_thumbnail(ctx, card, False) if not only_has_after_training(card) else None
@@ -268,7 +269,10 @@ async def compose_card_list_image(ctx: SekaiHandlerContext, cards: List[Dict], q
         except: 
             logger.print_exc(f"获取卡牌{card['id']}完整缩略图失败")
             return UNKNOWN_IMG, UNKNOWN_IMG
-    thumbs = await batch_gather(*[get_thumb_nothrow(card) for card in cards])
+    thumbs = await batch_gather_with_progress(
+        *[get_thumb_nothrow(card) for card in cards],
+        progress_name=f"{ctx.region.upper()} 查卡缩略图加载",
+    )
     card_and_thumbs = [(card, thumb) for card, thumb in zip(cards, thumbs) if thumb is not None]
     card_and_thumbs.sort(key=lambda x: (x[0]['releaseAt'], x[0]['id']), reverse=True)
 
@@ -581,8 +585,8 @@ async def compose_box_image(ctx: SekaiHandlerContext, qid: int, cards: dict, sho
     if qid:
         profile, pmsg = await get_detailed_profile(ctx, qid, filter=get_detailed_profile_card_filter('userCards'), raise_exc=show_box)
         if profile:
-            pcards = profile['userCards']
-
+            pcards = profile.userCards
+        
     # collect card imgs
     async def get_card_full_thumbnail_nothrow(card):
         if pcard := find_by(pcards, 'cardId', card['id']):
@@ -595,8 +599,10 @@ async def compose_box_image(ctx: SekaiHandlerContext, qid: int, cards: dict, sho
             if only_has_after_training(card):
                 after_training = True
             return await get_card_full_thumbnail(ctx, card, after_training)
-            
-    card_imgs = await batch_gather(*[get_card_full_thumbnail_nothrow(card) for card in cards])
+    card_imgs = await batch_gather_with_progress(
+        *[get_card_full_thumbnail_nothrow(card) for card in cards],
+        progress_name=f"{ctx.region.upper()} box卡面加载",
+    )
 
     # collect chara cards
     chara_cards = {}
@@ -1068,10 +1074,10 @@ async def compose_card_detail_image(ctx: SekaiHandlerContext, card_id: int):
 
     # 衣装
     cos3d_ids = await ctx.md.card_costume3ds.find_by("cardId", card_id, mode='all')
-    cos3ds = await ctx.md.costume3ds.collect_by_ids([cos3d['costume3dId'] for cos3d in cos3d_ids])
+    cos3ds: list[Costume3D] = await ctx.md.costume3ds.collect_by_ids([cos3d['costume3dId'] for cos3d in cos3d_ids])
     cos3d_imgs = []
     for cos3d in cos3ds:
-        asset_name = cos3d['assetbundleName']
+        asset_name = cos3d.assetbundleName
         cos3d_imgs.append(ctx.rip.img(f"thumbnail/costume_rip/{asset_name}.png"))
     cos3d_imgs = await batch_gather(*cos3d_imgs)
 

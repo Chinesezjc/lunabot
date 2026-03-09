@@ -948,8 +948,8 @@ async def compose_event_record_image(ctx: SekaiHandlerContext, qid: int) -> Imag
         qid, 
         filter=get_detailed_profile_card_filter('userEvents','userWorldBlooms'), 
         raise_exc=True)
-    user_events: List[Dict[str, Any]] = profile.get('userEvents', [])
-    user_worldblooms: List[Dict[str, Any]] = profile.get('userWorldBlooms', [])
+    user_events: List[Dict[str, Any]] = profile.userEvents
+    user_worldblooms: List[Dict[str, Any]] = profile.userWorldBlooms
     for item in user_worldblooms:
         if 'worldBloomChapterPoint' in item:
             item['eventPoint'] = item['worldBloomChapterPoint']

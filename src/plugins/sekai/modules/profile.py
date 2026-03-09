@@ -4,6 +4,7 @@ from ..handler import *
 from ..asset import *
 from ..draw import *
 from ..gameapi import get_gameapi_config, request_gameapi
+from ..suite import Suite
 from .honor import compose_full_honor_image
 from .resbox import get_res_box_info, get_res_icon
 from ...utils.safety import *
@@ -28,6 +29,31 @@ class PlayerAvatarInfo:
 
 DEFAULT_DATA_MODE = 'latest'
 VALID_DATA_MODES = ['latest', 'default', 'local', 'haruki']
+
+CN_SUITE_FILTER_ALIASES = {
+    "userMusicResults": "compactUserMusicResults",
+    "userMusicAchievements": "compactUserMusicAchievements",
+    "userCharacterMissionV2Statuses": "compactUserCharacterMissionV2Statuses",
+}
+
+
+def expand_suite_filter_keys(
+    region: str,
+    mode: str | None,
+    keys: list[str] | set[str] | None,
+) -> list[str]:
+    if not keys:
+        return []
+    expanded = list(dict.fromkeys([str(k) for k in keys]))
+    if region != "cn":
+        return expanded
+    if mode == "haruki":
+        return expanded
+    for key in list(expanded):
+        alias = CN_SUITE_FILTER_ALIASES.get(key)
+        if alias and alias not in expanded:
+            expanded.append(alias)
+    return expanded
 
 
 @dataclass
@@ -637,7 +663,7 @@ async def get_detailed_profile(
     ignore_hide=False, 
     filter: list[str] | set[str] | None=None,
     strict: bool=True,
-) -> Tuple[dict, str]:
+) -> Tuple[Suite | None, str]:
     cache_path = None
     uid = None
     try:
@@ -665,8 +691,9 @@ async def get_detailed_profile(
         try:   
             url = url.format(uid=uid) + f"?mode={mode}"
             if filter:
-                url += f"&filter={','.join(filter)}"
-            profile = await request_gameapi(url)
+                req_filter = expand_suite_filter_keys(ctx.region, mode, filter)
+                url += f"&filter={','.join(req_filter)}"
+            profile = Suite.from_region(ctx.region, await request_gameapi(url))
         except HttpError as e:
             logger.info(f"获取 {qid} {ctx.region} {uid} 抓包数据失败: {get_exc_desc(e)}")
             if e.status_code == 404:
@@ -695,7 +722,7 @@ async def get_detailed_profile(
     except Exception as e:
         # 获取失败的情况，尝试读取缓存
         if cache_path and os.path.exists(cache_path):
-            profile = load_json(cache_path)
+            profile = Suite.from_region(ctx.region, load_json(cache_path))
             logger.info(f"从缓存获取 {qid} {ctx.region} {uid} 抓包数据")
             return profile, get_exc_desc(e) + "(使用先前的缓存数据)"
         else:
@@ -707,10 +734,10 @@ async def get_detailed_profile(
             return None, get_exc_desc(e)
 
     if strict and filter:
-        missing_keys = [k for k in filter if k not in profile]
+        missing_keys = profile.missing_fields(filter)
         if missing_keys:
-            source = profile.get('source', '?')
-            update_time = datetime.fromtimestamp(profile['upload_time'] / 1000).strftime('%m-%d %H:%M:%S')
+            source = profile.source or '?'
+            update_time = datetime.fromtimestamp(profile.upload_time / 1000).strftime('%m-%d %H:%M:%S')
             raise ReplyException(f"你的{get_region_name(ctx.region)}Suite抓包数据中缺少必要的字段: {', '.join(missing_keys)}"
                                  f" (数据来源: {source} 更新时间: {update_time})")
         
@@ -721,10 +748,10 @@ def get_detailed_profile_card_filter(*s: str) -> set[str]:
     return {'userGamedata', 'userDecks', 'upload_time', 'userCards', *s}
 
 # 从玩家详细信息获取该玩家头像的PlayerAvatarInfo
-async def get_player_avatar_info_by_detailed_profile(ctx: SekaiHandlerContext, detail_profile: dict) -> PlayerAvatarInfo:
-    deck_id = detail_profile['userGamedata']['deck']
-    decks = find_by(detail_profile['userDecks'], 'deckId', deck_id)
-    pcards = [find_by(detail_profile['userCards'], 'cardId', decks[f'member{i}']) for i in range(1, 6)]
+async def get_player_avatar_info_by_detailed_profile(ctx: SekaiHandlerContext, detail_profile: Suite) -> PlayerAvatarInfo:
+    deck_id = detail_profile.userGamedata['deck']
+    decks = find_by(detail_profile.userDecks, 'deckId', deck_id)
+    pcards = [find_by(detail_profile.userCards, 'cardId', decks[f'member{i}']) for i in range(1, 6)]
     for pcard in pcards:
         pcard['after_training'] = pcard['defaultImage'] == "special_training" and pcard['specialTrainingStatus'] == "done"
     card_id = pcards[0]['cardId']
@@ -734,22 +761,22 @@ async def get_player_avatar_info_by_detailed_profile(ctx: SekaiHandlerContext, d
     return PlayerAvatarInfo(card_id, cid, unit, avatar_img)
 
 # 获取玩家详细信息的简单卡片控件，返回Frame
-async def get_detailed_profile_card(ctx: SekaiHandlerContext, profile: dict, err_msg: str, mode=None) -> Frame:
+async def get_detailed_profile_card(ctx: SekaiHandlerContext, profile: Suite | None, err_msg: str, mode=None) -> Frame:
     with Frame().set_bg(roundrect_bg()).set_padding(16) as f:
         with HSplit().set_content_align('c').set_item_align('c').set_sep(14):
             if profile:
                 avatar_info = await get_player_avatar_info_by_detailed_profile(ctx, profile)
 
-                frames = get_player_frames(ctx, profile['userGamedata']['userId'], profile)
+                frames = get_player_frames(ctx, profile.userGamedata['userId'], profile)
                 await get_avatar_widget_with_frame(ctx, avatar_info.img, 80, frames)
 
                 with VSplit().set_content_align('c').set_item_align('l').set_sep(5):
-                    game_data = profile['userGamedata']
-                    source = profile.get('source', '?')
-                    if local_source := profile.get('local_source'):
+                    game_data = profile.userGamedata
+                    source = profile.source or '?'
+                    if local_source := profile.local_source:
                         source += f"({local_source})"
                     mode = mode or get_user_data_mode(ctx, ctx.user_id)
-                    update_time = datetime.fromtimestamp(profile['upload_time'] / 1000)
+                    update_time = datetime.fromtimestamp(profile.upload_time / 1000)
                     update_time_text = update_time.strftime('%m-%d %H:%M:%S') + f" ({get_readable_datetime(update_time, show_original_time=False)})"
                     user_id = process_hide_uid(ctx, game_data['userId'], keep=6)
                     colored_text_box(
@@ -1048,13 +1075,13 @@ def get_profile_bg_settings(ctx: SekaiHandlerContext) -> ProfileBgSettings:
     return ret
 
 # 获取玩家框信息，提供detail_profile会直接取用并更新缓存，否则使用缓存数据
-def get_player_frames(ctx: SekaiHandlerContext, uid: str, detail_profile: Optional[dict] = None) -> List[dict]:
+def get_player_frames(ctx: SekaiHandlerContext, uid: str, detail_profile: Optional[Suite] = None) -> List[dict]:
     uid = str(uid)
     all_cached_frames = player_frame_db.get(ctx.region, {})
     cached_frames = all_cached_frames.get(uid, {})
     if detail_profile:
-        upload_time = detail_profile.get('upload_time', 0)
-        frames = detail_profile.get('userPlayerFrames', [])
+        upload_time = detail_profile.upload_time
+        frames = detail_profile.userPlayerFrames
         if upload_time > cached_frames.get('upload_time', 0):
             # 更新缓存
             cached_frames = {
@@ -1599,9 +1626,9 @@ async def _(ctx: SekaiHandlerContext):
         msg += f"[本地数据]\n获取失败: {local_err}\n"
     else:
         msg += "[本地数据]\n"
-        upload_time = datetime.fromtimestamp(local_profile['upload_time'] / 1000)
+        upload_time = datetime.fromtimestamp(local_profile.upload_time / 1000)
         upload_time_text = upload_time.strftime('%m-%d %H:%M:%S') + f"({get_readable_datetime(upload_time, show_original_time=False)})"
-        if local_source := local_profile.get('local_source'):
+        if local_source := local_profile.local_source:
             upload_time_text = local_source + " " + upload_time_text
         msg += f"{upload_time_text}\n"
 
@@ -1610,7 +1637,7 @@ async def _(ctx: SekaiHandlerContext):
         msg += f"[Haruki工具箱]\n获取失败: {haruki_err}\n"
     else:
         msg += "[Haruki工具箱]\n"
-        upload_time = datetime.fromtimestamp(haruki_profile['upload_time'] / 1000)
+        upload_time = datetime.fromtimestamp(haruki_profile.upload_time / 1000)
         upload_time_text = upload_time.strftime('%m-%d %H:%M:%S') + f"({get_readable_datetime(upload_time, show_original_time=False)})"
         msg += f"{upload_time_text}\n"
 

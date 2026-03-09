@@ -674,8 +674,8 @@ async def compose_gacha_record_image(ctx: SekaiHandlerContext, qid: int, spec_gi
     )
 
     # 数据获取
-    assert_and_reply(profile.get('userGachas'), "没有找到抽卡记录，可能是最近没有抽过卡，或者Suite数据源未提供userGachas字段")
-    ugachas = profile.get('userGachas', [])
+    assert_and_reply(profile.userGachas, "没有找到抽卡记录，可能是最近没有抽过卡，或者Suite数据源未提供userGachas字段")
+    ugachas = profile.userGachas
 
     # 统计信息
     with ProfileTimer('gacha_record.records'):
@@ -742,7 +742,7 @@ async def compose_gacha_record_image(ctx: SekaiHandlerContext, qid: int, spec_gi
             gcards_dict[gid] = { c.id: c for c in gacha.cards }
 
         # 查找每个卡牌的可能卡池
-        ucards = profile.get('userCards', [])
+        ucards = profile.userCards
         ucard_possible_gacha_info: dict[int, list[dict]] = {}
         ucard_create_at: dict[int, datetime] = {}
         for uc in ucards:

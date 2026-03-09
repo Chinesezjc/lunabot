@@ -1,4 +1,6 @@
 from ..utils import *
+from ..utils import ProgressTqdm as _ProgressTqdm
+from ..utils import batch_gather_with_progress as _batch_gather_with_progress
 
 
 # ======================= 基础路径 ======================= #
@@ -174,6 +176,54 @@ STORYSUMMARY_WATERMARK = " [LunaBot生成-请勿转载] "
 
 
 # ======================= 通用功能 ======================= #
+class SekaiTqdm(_ProgressTqdm):
+    """
+    兼容旧命名，底层实现复用 utils.ProgressTqdm。
+    默认日志通道保持 Sekai logger。
+    """
+    def __init__(
+        self,
+        total: int,
+        desc: str = "任务进度",
+        progress_logger: Logger | None = None,
+        log_percent_step: int = 5,
+        log_interval_sec: float = 2.0,
+        single_line: bool | None = None,
+        bar_width: int = 24,
+    ):
+        super().__init__(
+            total=total,
+            desc=desc,
+            progress_logger=progress_logger or logger,
+            log_percent_step=log_percent_step,
+            log_interval_sec=log_interval_sec,
+            single_line=single_line,
+            bar_width=bar_width,
+        )
+
+
+async def batch_gather_with_progress(
+    *futs_or_coros,
+    batch_size: int = 32,
+    progress_name: str = "任务进度",
+    progress_logger: Logger | None = None,
+    log_percent_step: int = 5,
+    log_interval_sec: float = 2.0,
+    single_line: bool | None = None,
+) -> List[Any]:
+    """
+    兼容入口，底层实现复用 utils.batch_gather_with_progress。
+    默认日志通道保持 Sekai logger。
+    """
+    return await _batch_gather_with_progress(
+        *futs_or_coros,
+        batch_size=batch_size,
+        progress_name=progress_name,
+        progress_logger=progress_logger or logger,
+        log_percent_step=log_percent_step,
+        log_interval_sec=log_interval_sec,
+        single_line=single_line,
+    )
 
 # 参数提取器，提取文本中出现的参数，返回(参数的key, 剩余参数字符串)
 def extract_param_from_args(args: str, param_map: dict[str, list[str]], default=None) -> Tuple[Optional[str], str]:

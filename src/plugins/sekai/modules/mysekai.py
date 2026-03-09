@@ -4,6 +4,7 @@ from ..common import *
 from ..handler import *
 from ..asset import *
 from ..draw import *
+from ..suite import Suite
 from ..sub import SekaiUserSubHelper, SekaiGroupSubHelper
 from ..gameapi import get_gameapi_config, request_gameapi
 from .profile import (
@@ -237,22 +238,22 @@ async def get_mysekai_info_card(ctx: SekaiHandlerContext, mysekai_info: dict, ba
     return f
 
 # 获取玩家mysekai抓包数据+suite数据的简单卡片 返回 Frame
-async def get_mysekai_and_detail_profile_card(ctx: SekaiHandlerContext, mysekai_info: dict, profile: dict, err_msg: str, mode: str = None) -> Frame:
+async def get_mysekai_and_detail_profile_card(ctx: SekaiHandlerContext, mysekai_info: dict, profile: Suite | None, err_msg: str, mode: str = None) -> Frame:
     with Frame().set_bg(roundrect_bg()).set_padding(16) as f:
         with HSplit().set_content_align('c').set_item_align('c').set_sep(14):
             if profile and mysekai_info:
                 avatar_info = await get_player_avatar_info_by_detailed_profile(ctx, profile)
 
-                frames = get_player_frames(ctx, profile['userGamedata']['userId'], profile)
+                frames = get_player_frames(ctx, profile.userGamedata['userId'], profile)
                 await get_avatar_widget_with_frame(ctx, avatar_info.img, 80, frames)
 
                 with VSplit().set_content_align('c').set_item_align('l').set_sep(5):
-                    game_data = profile['userGamedata']
-                    source = profile.get('source', '?')
-                    if local_source := profile.get('local_source'):
+                    game_data = profile.userGamedata
+                    source = profile.source or '?'
+                    if local_source := profile.local_source:
                         source += f"({local_source})"
                     mode = mode or get_user_data_mode(ctx, ctx.user_id)
-                    update_time = datetime.fromtimestamp(profile['upload_time'] / 1000)
+                    update_time = datetime.fromtimestamp(profile.upload_time / 1000)
                     update_time_text = update_time.strftime('%m-%d %H:%M:%S') + f" ({get_readable_datetime(update_time, show_original_time=False)})"
                     user_id = process_hide_uid(ctx, game_data['userId'], keep=6)
 
@@ -1475,7 +1476,7 @@ async def compose_mysekai_door_upgrade_image(ctx: SekaiHandlerContext, qid: int,
     # 获取玩家的材料
     user_materials = {}
     if profile:
-        lv_materials = profile.get('userMysekaiMaterials', [])
+        lv_materials = profile.userMysekaiMaterials
         user_materials = {item['mysekaiMaterialId']: item['quantity'] for item in lv_materials}
 
     # 获取每级升级材料
@@ -1497,7 +1498,7 @@ async def compose_mysekai_door_upgrade_image(ctx: SekaiHandlerContext, qid: int,
     # 获取指定lv
     spec_lvs = {}
     if profile:
-        gates = profile.get('userMysekaiGates', [])
+        gates = profile.userMysekaiGates
         if not gates:
             raise ReplyException("查询不到你的烤森门（需要更新Suite抓包数据）")
         for item in gates:
@@ -1771,8 +1772,8 @@ async def compose_mysekai_talk_list_image(
                 qid, 
                 filter=get_detailed_profile_card_filter('userMysekaiCharacterTalks'),
                 raise_exc=True)
-            assert_and_reply('userMysekaiCharacterTalks' in profile, "你的Suite抓包数据来源没有提供角色家具对话数据")
-            user_character_talks = profile['userMysekaiCharacterTalks']
+            assert_and_reply(profile.has_field('userMysekaiCharacterTalks'), "你的Suite抓包数据来源没有提供角色家具对话数据")
+            user_character_talks = profile.userMysekaiCharacterTalks
         else:
             profile = None
             user_character_talks = []

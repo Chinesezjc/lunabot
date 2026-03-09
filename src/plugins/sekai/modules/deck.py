@@ -3,6 +3,7 @@ from ..common import *
 from ..handler import *
 from ..asset import *
 from ..draw import *
+from ..suite import Suite
 from .event import get_event_banner_img, get_current_event
 from .sk import get_wl_events
 from .profile import (
@@ -1225,7 +1226,7 @@ async def do_deck_recommend_batch(
     return ret
 
 # 构造顶配profile
-async def construct_max_profile(ctx: SekaiHandlerContext, max_area_item_level: int | None = None) -> dict:
+async def construct_max_profile(ctx: SekaiHandlerContext, max_area_item_level: int | None = None) -> Suite:
     try: 
         await ctx.md.mysekai_gates.get()
         has_mysekai = True
@@ -1329,16 +1330,16 @@ async def construct_max_profile(ctx: SekaiHandlerContext, max_area_item_level: i
         ]
     })
 
-    return p
+    return Suite.from_region(ctx.region, p)
 
 # 根据用户数据推荐挑战组卡歌曲
 async def recommend_challenge_music(
     ctx: SekaiHandlerContext,
-    profile: dict | None,
+    profile: Suite | None,
 ) -> tuple[int, str] | None:
     if not config.get('deck.challenge_music_auto_recommend.enabled'):
         return None
-    if not profile or not profile.get('userMusicResults'):
+    if not profile or not profile.userMusicResults:
         return None
 
     # 统计各难度各等级fc数量
@@ -1349,7 +1350,7 @@ async def recommend_challenge_music(
             level = (await get_music_diff_info(ctx, mid)).level.get(diff)
             if not level: 
                 continue
-            results = find_by(profile['userMusicResults'], "musicId", mid, mode='all') 
+            results = find_by(profile.userMusicResults, "musicId", mid, mode='all')
             results = find_by(results, 'musicDifficultyType', diff, mode='all') + find_by(results, 'musicDifficulty', diff, mode='all')
             if results:
                 full_combo, all_prefect = False, False
@@ -1457,28 +1458,28 @@ async def compose_deck_recommend_image(
                 ),
                 strict=False,
                 raise_exc=True, ignore_hide=True)
-            uid = profile['userGamedata']['userId']
+            uid = profile.userGamedata.get('userId')
 
-    original_usercards = profile['userCards']
+    original_usercards = profile.userCards
     # 组合卡牌过滤
     unit_filter = additional.get('unit_filter', None)
     if unit_filter:
-        profile['userCards'] = [
-            uc for uc in profile['userCards']
+        profile.userCards = [
+            uc for uc in profile.userCards
             if await get_unit_by_card_id(ctx, uc['cardId'], return_support=(unit_filter != 'piapro')) == unit_filter
         ]
     # 属性卡牌过滤
     attr_filter = additional.get('attr_filter', None)
     if attr_filter:
-        profile['userCards'] = [
-            uc for uc in profile['userCards']
+        profile.userCards = [
+            uc for uc in profile.userCards
             if (await ctx.md.cards.find_by_id(uc['cardId']))['attr'] == attr_filter
         ]
     # 排除卡牌
     excluded_cards = additional.get('excluded_cards', [])
     if excluded_cards:
-        profile['userCards'] = [
-            uc for uc in profile['userCards']
+        profile.userCards = [
+            uc for uc in profile.userCards
             if uc['cardId'] not in excluded_cards
         ]
 
@@ -1487,7 +1488,7 @@ async def compose_deck_recommend_image(
     if use_current_deck:
         assert_and_reply(recommend_type != 'challenge_all', "需要指定挑战组卡角色才能使用\"当前\"参数")
         if recommend_type == 'challenge':
-            deck = find_by(profile.get('userChallengeLiveSoloDecks', []), "characterId", options.challenge_live_character_id)
+            deck = find_by(profile.userChallengeLiveSoloDecks, "characterId", options.challenge_live_character_id)
             assert_and_reply(deck, "找不到你的该角色的当前挑战卡组（更新当前挑战卡组需要抓包）")
             cards = []
             if deck.get('leader'): cards.append(deck['leader'])
@@ -1510,7 +1511,7 @@ async def compose_deck_recommend_image(
             options.best_skill_as_leader = False
             # 转移basic_profile中的卡到profile中
             for bp_card in basic_profile['userCards']:
-                if p_card := find_by(profile['userCards'], 'cardId', bp_card['cardId']):
+                if p_card := find_by(profile.userCards, 'cardId', bp_card['cardId']):
                     p_card.update(bp_card)
                 else:
                     # suite中没有该卡，提示需要抓包更新
@@ -1520,8 +1521,8 @@ async def compose_deck_recommend_image(
     is_deck_fixed = options.fixed_cards and len(options.fixed_cards) == 5 or use_current_deck
     if is_deck_fixed:
         options.algorithm = "dfs"
-        profile['userCards'] = [
-            uc for uc in profile['userCards']
+        profile.userCards = [
+            uc for uc in profile.userCards
             if uc['cardId'] in options.fixed_cards
         ]
 
@@ -1606,14 +1607,14 @@ async def compose_deck_recommend_image(
             if lv < area_item_level:
                 raise ReplyException(f"{get_region_name(ctx.region)}区域道具等级最多为{lv}")
         # 已存在的区域道具等级覆盖
-        for area in profile['userAreas']:
+        for area in profile.userAreas:
             for area_item in area['areaItems']:
                 item_id = area_item['areaItemId']
                 if item_id in levels:
                     area_item['level'] = max(area_item['level'], levels[item_id])
                     del levels[item_id]
         # 不存在的添加
-        profile['userAreas'].append({
+        profile.userAreas.append({
             "userAreaStatus": {},
             "areaItems": [
                 {
@@ -1630,9 +1631,9 @@ async def compose_deck_recommend_image(
     log_options(ctx, uid, options)
 
     # 准备用户数据
-    user_data = dump_bytes_json(profile)  
+    user_data = dump_bytes_json(profile.to_dict())
     # 还原profile避免画头像问题
-    profile['userCards'] = original_usercards
+    profile.userCards = original_usercards
 
     # 准备批次组卡参数
     all_options = []
@@ -1751,7 +1752,7 @@ async def compose_deck_recommend_image(
     for deck in result_decks:
         for deckcard in deck.cards:
             card = await ctx.md.cards.find_by_id(deckcard.card_id)
-            usercard = find_by(profile['userCards'], 'cardId', deckcard.card_id)
+            usercard = find_by(profile.userCards, 'cardId', deckcard.card_id)
             pcard = {
                 'cardId': deckcard.card_id,
                 'defaultImage': deckcard.default_image,                                 # 默认图片跟随组卡结果

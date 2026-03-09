@@ -1,5 +1,6 @@
 from ..utils import *
 from .common import *
+from .costume3d import Costume3D
 import threading
 
 asset_config = Config('sekai.asset')
@@ -11,6 +12,18 @@ DEFAULT_VERSION = "0.0.0.0"
 MASTER_DB_CACHE_DIR = f"{SEKAI_ASSET_DIR}/masterdata/"
 DEFAULT_INDEX_KEYS = ['id']
 DEFAULT_SORT_KEYS = []
+
+
+def _is_mapping_like_item(item: Any) -> bool:
+    if isinstance(item, dict):
+        return True
+    if isinstance(item, (list, tuple, str, bytes)):
+        return False
+    return (
+        hasattr(item, "__contains__")
+        and hasattr(item, "__getitem__")
+        and hasattr(item, "get")
+    )
 
 def get_multi_keys(data: dict, keys: List[Any]):
     for key in keys:
@@ -239,8 +252,7 @@ class MasterDataManager:
         try:
             await asyncio.wait_for(_download(), timeout)
         except asyncio.TimeoutError:
-            logger.warning(f"下载 MasterData [{region}.{self.name}] 超时")
-            return
+            raise Exception(f"下载 MasterData [{region}.{self.name}] 超时")
         self.version[region] = source.version
 
         # 缓存到本地
@@ -283,9 +295,33 @@ class MasterDataManager:
                     logger.warning(f"MasterData [{region}.{self.name}] 从本地缓存加载失败: {e}")
             # 检查是否更新
             db_mgr = RegionMasterDbManager.get(region)
-            source = await db_mgr.get_latest_source()
-            if get_version_order(self.version.get(region, DEFAULT_VERSION)) < get_version_order(source.version):
-                await self._download_from_db(region, source)
+            sources = await db_mgr.get_all_sources()
+            current_version = self.version.get(region, DEFAULT_VERSION)
+
+            # 仅当存在更高版本时尝试下载，失败则回退到其他源
+            newer_sources = [s for s in sources if get_version_order(current_version) < get_version_order(s.version)]
+            if newer_sources:
+                download_ok = False
+                error_list: list[tuple[str, str]] = []
+                for source in newer_sources:
+                    try:
+                        await self._download_from_db(region, source)
+                        download_ok = True
+                        break
+                    except Exception as e:
+                        err = get_exc_desc(e)
+                        error_list.append((source.name, err))
+                        logger.warning(
+                            f"MasterData [{region}.{self.name}] 从源 [{source.name}] 更新失败: {err}"
+                        )
+
+                if not download_ok and self.data.get(region) is None:
+                    error_text = " | ".join([f"[{name}] {truncate(err, 80)}" for name, err in error_list]) or "unknown error"
+                    raise Exception(f"获取 MasterData [{region}.{self.name}] 的数据失败: {error_text}")
+                elif not download_ok:
+                    logger.warning(
+                        f"MasterData [{region}.{self.name}] 所有更新源均失败，继续使用本地缓存版本 {current_version}"
+                    )
             # 检查是否存在，如果仍然不存在则报错
             if self.data.get(region) is None:
                 raise Exception(f"获取 MasterData [{region}.{self.name}] 的数据失败")
@@ -439,6 +475,11 @@ class RegionMasterDataWrapper:
             raise ValueError(f"未知的查找模式: {mode}")
         # 没有索引的情况下遍历查找
         data = await self.get()
+        if isinstance(data, list) and data and not _is_mapping_like_item(data[0]):
+            logger.warning(f"MasterData [{self.region}.{self.mgr.name}] 数据项不是映射对象，find_by降级为空结果")
+            if mode == 'all':
+                return []
+            return None
         return find_by(data, key, value, mode)
 
     async def collect_by(self, key: str, values: Union[List[Any], Set[Any]]):
@@ -458,7 +499,9 @@ class RegionMasterDataWrapper:
         values_set = set(values)
         ret = []
         for item in data:
-            if item[key] in values_set:
+            if not _is_mapping_like_item(item):
+                continue
+            if key in item and item[key] in values_set:
                 ret.append(item)
         return ret
                     
@@ -647,6 +690,19 @@ async def resource_boxes_download_fn(base_url):
 # async def costume3ds_download_fn(base_url):
 #     costume3ds = await download_json(f"{base_url}/compactCostume3ds.json")
 #     return await run_in_pool(convert_compact_data, costume3ds)
+
+@MasterDataManager.map_function("costume3ds")
+def costume3ds_map_fn(costume3ds):
+    # costume3ds 统一封装为 Costume3D（兼容 dict 与 list 行式紧凑结构）
+    if not isinstance(costume3ds, list) or not costume3ds:
+        return costume3ds
+    ret: list[Costume3D] = []
+    for row in costume3ds:
+        try:
+            ret.append(Costume3D.from_raw(row))
+        except Exception as e:
+            logger.warning(f"解析 costume3ds 行失败: {get_exc_desc(e)}")
+    return ret
 
 
 # ================================ MasterData自定义转换 ================================ #
@@ -1147,4 +1203,3 @@ class WebJsonRes:
         await self._check_before_get(timeout, raise_on_no_data)
         return self.hash
     
-

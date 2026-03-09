@@ -2201,6 +2201,7 @@ async def compose_best30_image_new(ctx: SekaiHandlerContext, qid: int) -> Image.
         constant_results, stats = await _get_live_records_best30_entries(ctx, qid)
         total_num = len(constant_results)
         user_rating = sum(cr['rating'] for cr in constant_results) / total_num
+        latest_finish_at_ms = max((cr['finish_at_ms'] for cr in constant_results), default=None)
 
     music_covers = await batch_gather(*[get_music_cover_thumb(ctx, cr['mid']) for cr in constant_results])
     for cr, cover in zip(constant_results, music_covers):
@@ -2220,7 +2221,7 @@ async def compose_best30_image_new(ctx: SekaiHandlerContext, qid: int) -> Image.
         with VSplit().set_content_align('lt').set_item_align('lt').set_sep(16):
             with HSplit().set_content_align('l').set_item_align('l').set_sep(16).set_item_bg(roundrect_bg()):
                 if profile:
-                    (await get_basic_profile_card(ctx, profile)).set_bg(None)
+                    (await get_basic_profile_card(ctx, profile, update_time_ms=latest_finish_at_ms)).set_bg(None)
                 with VSplit().set_content_align('l').set_item_align('l').set_sep(8).set_padding(16):
                     shadow_color = LinearGradient(PLAY_RESULT_COLORS['ap'], PLAY_RESULT_COLORS['fc'], (0, 0), (1, 1))
                     style = TextStyle(DEFAULT_BOLD_FONT, 24, BLACK, use_shadow=True, shadow_color=shadow_color, shadow_offset=3)

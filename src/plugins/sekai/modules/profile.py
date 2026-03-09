@@ -592,7 +592,7 @@ async def get_user_live_records(
     return records
 
 # 获取玩家基本信息的简单卡片控件，返回Frame
-async def get_basic_profile_card(ctx: SekaiHandlerContext, profile: dict) -> Frame:
+async def get_basic_profile_card(ctx: SekaiHandlerContext, profile: dict, update_time_ms: int | None = None) -> Frame:
     with Frame().set_bg(roundrect_bg()).set_padding(16) as f:
         with HSplit().set_content_align('c').set_item_align('c').set_sep(14):
             avatar_info = await get_player_avatar_info_by_basic_profile(ctx, profile)
@@ -608,9 +608,13 @@ async def get_basic_profile_card(ctx: SekaiHandlerContext, profile: dict) -> Fra
                     TextStyle(font=DEFAULT_BOLD_FONT, size=24, color=BLACK, use_shadow=True, shadow_offset=2, shadow_color=ADAPTIVE_SHADOW),
                 )
                 TextBox(f"{ctx.region.upper()}: {user_id}", TextStyle(font=DEFAULT_FONT, size=16, color=BLACK))
-                if 'update_time' in profile:
-                    update_time = datetime.fromtimestamp(profile['update_time'] / 1000)
-                    update_time_text = update_time.strftime('%m-%d %H:%M:%S') + f" ({get_readable_datetime(update_time, show_original_time=False)})"
+                raw_update_time = update_time_ms if update_time_ms is not None else profile.get('update_time')
+                if raw_update_time is not None:
+                    try:
+                        update_time = datetime.fromtimestamp(int(raw_update_time) / 1000)
+                        update_time_text = update_time.strftime('%m-%d %H:%M:%S') + f" ({get_readable_datetime(update_time, show_original_time=False)})"
+                    except Exception:
+                        update_time_text = "?"
                 else:
                     update_time_text = "?"
                 TextBox(f"更新时间: {update_time_text}", TextStyle(font=DEFAULT_FONT, size=16, color=BLACK))

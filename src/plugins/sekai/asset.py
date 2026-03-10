@@ -686,10 +686,15 @@ async def resource_boxes_download_fn(base_url):
         return resbox
     return await run_in_pool(convert, resbox, resbox_detail)
 
-# @MasterDataManager.download_function("costume3ds", regions=COMPACT_DATA_REGIONS)
-# async def costume3ds_download_fn(base_url):
-#     costume3ds = await download_json(f"{base_url}/compactCostume3ds.json")
-#     return await run_in_pool(convert_compact_data, costume3ds)
+@MasterDataManager.download_function("costume3ds", regions=COMPACT_DATA_REGIONS)
+async def costume3ds_download_fn(base_url):
+    try:
+        costume3ds = await download_json(f"{base_url}/compactCostume3ds.json")
+        if isinstance(costume3ds, dict):
+            return await run_in_pool(convert_compact_data, costume3ds)
+    except Exception as e:
+        logger.warning(f"下载 compactCostume3ds 失败，回退 costume3ds.json: {get_exc_desc(e)}")
+    return await download_json(f"{base_url}/costume3ds.json")
 
 @MasterDataManager.map_function("costume3ds")
 def costume3ds_map_fn(costume3ds):

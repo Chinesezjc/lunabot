@@ -50,6 +50,93 @@ def get_musicmetas_json(region:str)->WebJsonRes:
     return region_musicmetas_json.get(region, default_musicmetas_json)
 
 
+MUSICMETA_REQUIRED_KEYS = (
+    "music_time",
+    "event_rate",
+    "base_score",
+    "base_score_auto",
+    "skill_score_solo",
+    "skill_score_auto",
+    "skill_score_multi",
+    "fever_score",
+    "fever_end_time",
+    "tap_count",
+)
+_musicmeta_repair_logged_keys: set[tuple[str, str, int]] = set()
+
+
+def _repair_musicmetas(
+    region: str,
+    music_metas: list[dict],
+    fallback_metas: list[dict] | None,
+    raw_hash: str | None,
+) -> list[dict]:
+    if not music_metas or not fallback_metas:
+        return music_metas
+
+    fallback_index = {
+        (item.get("music_id"), item.get("difficulty")): item
+        for item in fallback_metas
+        if isinstance(item, dict)
+    }
+    ret: list[dict] = []
+    repaired_count = 0
+
+    for item in music_metas:
+        if not isinstance(item, dict):
+            ret.append(item)
+            continue
+
+        missing_keys = [key for key in MUSICMETA_REQUIRED_KEYS if key not in item]
+        if not missing_keys:
+            ret.append(item)
+            continue
+
+        fallback = fallback_index.get((item.get("music_id"), item.get("difficulty")))
+        if not fallback:
+            ret.append(item)
+            continue
+
+        repaired = dict(item)
+        repaired_any = False
+        for key in missing_keys:
+            if key in fallback:
+                repaired[key] = fallback[key]
+                repaired_any = True
+        ret.append(repaired)
+        if repaired_any:
+            repaired_count += 1
+
+    if repaired_count:
+        log_key = (region, raw_hash or "", repaired_count)
+        if log_key not in _musicmeta_repair_logged_keys:
+            _musicmeta_repair_logged_keys.add(log_key)
+            logger.warning(
+                f"{region} MusicMeta 存在缺失字段，已从默认 MusicMeta 回填 {repaired_count} 条记录"
+            )
+
+    return ret
+
+
+async def get_musicmetas(
+    region: str,
+    timeout: float = 5.0,
+    raise_on_no_data: bool = True,
+) -> list[dict] | None:
+    musicmetas_json = get_musicmetas_json(region)
+    music_metas = await musicmetas_json.get(timeout=timeout, raise_on_no_data=raise_on_no_data)
+    if not music_metas:
+        return music_metas
+
+    if not any(isinstance(item, dict) and any(key not in item for key in MUSICMETA_REQUIRED_KEYS) for item in music_metas):
+        return music_metas
+
+    fallback_metas = None
+    if musicmetas_json is not default_musicmetas_json:
+        fallback_metas = await default_musicmetas_json.get(timeout=timeout, raise_on_no_data=False)
+    return _repair_musicmetas(region, music_metas, fallback_metas, musicmetas_json.hash)
+
+
 DIFF_NAMES = [
     ("easy", "Easy", "EASY", "ez", "EZ"),
     ("normal", "Normal", "NORMAL", "nm", "NM", ), 
@@ -774,8 +861,7 @@ async def get_music_leaderboard_data(
     target: str | list[str] = 'all',
     live_type: str | list[str] = 'all',
 ) -> list[dict]:
-    musicmetas_json = get_musicmetas_json(region)
-    musicmetas = await musicmetas_json.get(raise_on_no_data=False)
+    musicmetas = await get_musicmetas(region, raise_on_no_data=False)
     if not musicmetas:
         return []
 
@@ -1566,10 +1652,7 @@ async def get_music_audio_length(ctx: SekaiHandlerContext, mid: int) -> Optional
     if length := file_db.get(key, None):
         return timedelta(seconds=length)
     # 尝试从music_meta获取
-    music_metas = None
-    musicmetas_json = get_musicmetas_json(ctx.region)
-    if musicmetas_json:
-        music_metas = await musicmetas_json.get(raise_on_no_data=False)
+    music_metas = await get_musicmetas(ctx.region, raise_on_no_data=False)
     if music_metas and (item := find_by(music_metas, 'music_id', mid)):
         length = item['music_time']
     else:

@@ -24,6 +24,7 @@ from .music import (
     get_music_cover_thumb,
     get_valid_musics,
     get_music_diff_info,
+    get_musicmetas,
     get_musicmetas_json,
 )
 from .mysekai import MYSEKAI_REGIONS
@@ -1027,6 +1028,19 @@ def add_omakase_music(music_metas: list[dict]) -> list[dict]:
     music_count = 0
     for item in music_metas:
         if item['difficulty'] in OMAKASE_MUSIC_DIFFS:
+            if any(key not in item for key in (
+                'music_time',
+                'event_rate',
+                'base_score',
+                'base_score_auto',
+                'skill_score_solo',
+                'skill_score_auto',
+                'skill_score_multi',
+                'fever_score',
+                'fever_end_time',
+                'tap_count',
+            )):
+                continue
             omakase['music_time'] += item['music_time']
             omakase['event_rate'] += item['event_rate']
             omakase['base_score'] += item['base_score']
@@ -1553,8 +1567,7 @@ async def compose_deck_recommend_image(
 /指令 ... 歌曲比较 龙 虾ex #1 2 3 4 5
 """.strip())
             # 没有指定比较的歌曲，则通过musicmeta计算出5张卡技能加分全100%的情况的前排候选歌曲，
-            musicmetas_json = get_musicmetas_json(ctx.region)
-            musicmetas = await musicmetas_json.get()
+            musicmetas = await get_musicmetas(ctx.region)
             music_values = []
             is_multi = options.live_type in ['multi', 'cheerful']
             is_auto = options.live_type in ['auto', 'challenge_auto']
@@ -2306,7 +2319,7 @@ async def deckrec_update_data():
 
                 if with_musicmetas:
                     logger.info(f"为自动组卡加载 {ctx.region} musicmetas")
-                    musicmetas = await musicmetas_json.get()
+                    musicmetas = await get_musicmetas(ctx.region)
                     musicmetas = add_omakase_music(musicmetas)
                     add_payload_segment(payloads, b'musicmetas')
                     add_payload_segment(payloads, dumps_json(musicmetas, indent=False).encode('utf-8'))

@@ -4,7 +4,6 @@ from ..handler import *
 from ..asset import *
 from ..draw import *
 from .music import *
-from .deck import get_musicmetas_json
 from src.pjsekai import scores as pjsekai_scores
 
 # ======================= 处理逻辑 ======================= #
@@ -81,8 +80,7 @@ async def generate_music_chart(
     # music_meta 显示技能时同时可以显示技能的加成效果和fever的效果
     music_meta = None
     if skill:
-        musicmetas_json = get_musicmetas_json(ctx.region)
-        music_metas = find_by(await musicmetas_json.get(), "music_id", music_id, mode='all')
+        music_metas = find_by(await get_musicmetas(ctx.region), "music_id", music_id, mode='all')
         if music_metas:
             music_meta = find_by(music_metas, "difficulty", difficulty)
         # assert_and_reply(music_meta, f'歌曲{music_id}难度{difficulty}暂无技能信息')
@@ -180,4 +178,3 @@ async def _(ctx: SekaiHandlerContext):
         
     msg += ret.candidate_msg
     return await ctx.asend_reply_msg(msg.strip())
-

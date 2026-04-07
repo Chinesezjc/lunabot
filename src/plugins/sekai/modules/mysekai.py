@@ -124,6 +124,23 @@ async def get_chara_icon_by_chara_unit_id(ctx: SekaiHandlerContext, cuid: int) -
     cu = await ctx.md.game_character_units.find_by_id(cuid)
     return get_chara_icon_by_chara_id(cid=cu['gameCharacterId'], unit=cu['unit'])
 
+
+def get_mysekai_source_error(mode: str | None, payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    if isinstance(payload.get("error"), str) and payload["error"].strip():
+        return payload["error"].strip()
+    if payload:
+        return None
+
+    source = "数据源"
+    if mode == "local":
+        source = "本地数据"
+    elif mode == "haruki":
+        source = "Haruki工具箱"
+    return f"{source}中没有找到该账号的Mysekai抓包数据"
+
+
 # 获取玩家mysekai抓包数据 返回 (mysekai_info, err_msg)
 async def get_mysekai_info(
     ctx: SekaiHandlerContext, 
@@ -155,12 +172,21 @@ async def get_mysekai_info(
             url = url.format(uid=uid) + f"?mode={mode}"
             if filter:
                 url += f"&filter={','.join(filter)}"
-            mysekai_info = await request_gameapi(url)
+            raw_info = await request_gameapi(url)
+            if source_err := get_mysekai_source_error(mode, raw_info):
+                raise ReplyException(source_err)
+            mysekai_info = raw_info
         except HttpError as e:
             logger.info(f"获取 {qid} {ctx.region} {uid} mysekai抓包数据失败: {get_exc_desc(e)}")
             if e.status_code == 404:
                 local_err = e.message.get('local_err', None)
                 haruki_err = e.message.get('haruki_err', None)
+                if mode == "local" and (local_err is not None or haruki_err is not None):
+                    detail = local_err if local_err is not None else haruki_err
+                    raise ReplyException(f"[本地数据] {detail}")
+                if mode == "haruki" and (haruki_err is not None or local_err is not None):
+                    detail = haruki_err if haruki_err is not None else local_err
+                    raise ReplyException(f"[Haruki工具箱] {detail}")
                 msg = f"获取你的{get_region_name(ctx.region)}Mysekai抓包数据失败，发送\"/抓包\"指令可获取帮助\n"
                 if local_err is not None: msg += f"[本地数据] {local_err}\n"
                 if haruki_err is not None: msg += f"[Haruki工具箱] {haruki_err}\n"

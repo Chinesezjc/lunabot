@@ -56,6 +56,22 @@ def expand_suite_filter_keys(
     return expanded
 
 
+def get_suite_source_error(mode: str | None, payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    if isinstance(payload.get("error"), str) and payload["error"].strip():
+        return payload["error"].strip()
+    if payload:
+        return None
+
+    source = "数据源"
+    if mode == "local":
+        source = "本地数据"
+    elif mode == "haruki":
+        source = "Haruki工具箱"
+    return f"{source}中没有找到该账号的Suite抓包数据"
+
+
 @dataclass
 class VerifyCode:
     region: str
@@ -697,12 +713,21 @@ async def get_detailed_profile(
             if filter:
                 req_filter = expand_suite_filter_keys(ctx.region, mode, filter)
                 url += f"&filter={','.join(req_filter)}"
-            profile = Suite.from_region(ctx.region, await request_gameapi(url))
+            raw_profile = await request_gameapi(url)
+            if source_err := get_suite_source_error(mode, raw_profile):
+                raise ReplyException(source_err)
+            profile = Suite.from_region(ctx.region, raw_profile)
         except HttpError as e:
             logger.info(f"获取 {qid} {ctx.region} {uid} 抓包数据失败: {get_exc_desc(e)}")
             if e.status_code == 404:
                 local_err = e.message.get('local_err', None)
                 haruki_err = e.message.get('haruki_err', None)
+                if mode == "local" and (local_err is not None or haruki_err is not None):
+                    detail = local_err if local_err is not None else haruki_err
+                    raise ReplyException(f"[本地数据] {detail}")
+                if mode == "haruki" and (haruki_err is not None or local_err is not None):
+                    detail = haruki_err if haruki_err is not None else local_err
+                    raise ReplyException(f"[Haruki工具箱] {detail}")
                 msg = f"获取你的{get_region_name(ctx.region)}Suite抓包数据失败，发送\"/抓包\"指令可获取帮助\n"
                 if local_err is not None: msg += f"[本地数据] {local_err}\n"
                 if haruki_err is not None: msg += f"[Haruki工具箱] {haruki_err}\n"
@@ -742,8 +767,11 @@ async def get_detailed_profile(
         if missing_keys:
             source = profile.source or '?'
             update_time = datetime.fromtimestamp(profile.upload_time / 1000).strftime('%m-%d %H:%M:%S')
-            raise ReplyException(f"你的{get_region_name(ctx.region)}Suite抓包数据中缺少必要的字段: {', '.join(missing_keys)}"
-                                 f" (数据来源: {source} 更新时间: {update_time})")
+            err_msg = (f"你的{get_region_name(ctx.region)}Suite抓包数据中缺少必要的字段: {', '.join(missing_keys)}"
+                       f" (数据来源: {source} 更新时间: {update_time})")
+            if raise_exc:
+                raise ReplyException(err_msg)
+            return None, err_msg
         
     return profile, ""
 

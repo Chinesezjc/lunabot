@@ -301,8 +301,8 @@ async def extract_target_event_or_simulate_event(
     args: str,
     options: DeckRecommendOptions,
 ) -> str:
-    # 匹配模拟WL活动（角色名+wl1 / wl2）
-    for turn in (1, 2):
+    # 匹配模拟WL活动（角色名+wl1 / wl2 / wl3）
+    for turn in (1, 2, 3):
         if f"wl{turn}" in args:
             for nickname, cid in get_character_nickname_data().nickname_ids:
                 if nickname in args:
@@ -1226,7 +1226,7 @@ async def do_deck_recommend_batch(
             elif options.target == "skill":
                 return deck.multi_live_score_up
             elif options.target == "bonus":
-                return (-deck.event_bonus_rate, deck.score)
+                return (deck.event_bonus_rate, deck.score)
         limit = options.limit if options.target != "bonus" else options.limit * len(options.target_bonus_list)
         decks = sorted(decks, key=key_func, reverse=True)[:limit]
         src_algs = [deck_src_alg[get_deck_hash(deck)] for deck in decks]
@@ -1539,6 +1539,22 @@ async def compose_deck_recommend_image(
             uc for uc in profile.userCards
             if uc['cardId'] in options.fixed_cards
         ]
+
+    # 业务前置校验：避免把空卡池问题交给组卡后端并透传 5xx
+    if not profile.userCards:
+        upload_time_text = "未知"
+        if profile.upload_time:
+            try:
+                upload_time = datetime.fromtimestamp(profile.upload_time / 1000)
+                upload_time_text = upload_time.strftime('%m-%d %H:%M:%S')
+            except Exception:
+                upload_time_text = str(profile.upload_time)
+        raise ReplyException(f"""
+你的{get_region_name(ctx.region)}Suite抓包数据中没有可用卡牌（userCards为空），无法组卡
+数据来源: {profile.source or "?"}
+数据更新时间: {upload_time_text}
+请重新上传Suite抓包数据，或切换抓包模式后重试（例如：/{ctx.region}抓包模式 latest）
+""".strip())
 
     # 检查是否在未使用固定队伍情况下指定技能顺序
     if not is_deck_fixed:

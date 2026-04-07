@@ -147,13 +147,9 @@ class EventTracker:
         """
         请求榜线数据，返回 (数据，耗时)
         """
-        try:
-            t = datetime.now().timestamp()
-            data = await request_gameapi(url.format(event_id=eid))
-            return (data, datetime.now().timestamp() - t)
-        except Exception:
-            self.error(f"请求榜线数据失败")
-            return (None, datetime.now().timestamp() - t)
+        t = datetime.now().timestamp()
+        data = await request_gameapi(url.format(event_id=eid))
+        return (data, datetime.now().timestamp() - t)
         
 
     async def update_rankings(self, eid: int, data: dict, is_high_res: bool) -> tuple[int, int, float]:
@@ -216,11 +212,11 @@ class EventTracker:
         try:
             if not (event := get_current_event(region, fallback="prev")):
                 self.info(f"当前无进行中或已结束活动，跳过榜线更新")
-                close_conn(region)
+                await close_conn(region)
                 return ret
             if datetime.now() > datetime.fromtimestamp(event['aggregateAt'] / 1000 + RECORD_TIME_AFTER_EVENT_END_CFG.get() * 60):
                 self.info(f"当前活动 {event['id']} 已过榜线记录时间，跳过榜线更新")
-                close_conn(region)
+                await close_conn(region)
                 return ret
         except Exception as e:
             self.warning(f"检查当前活动时失败: {get_exc_desc(e)}")
@@ -232,8 +228,14 @@ class EventTracker:
                 latest_rankings_cache[region].pop(key)
                 self.info(f"清除非当前活动 {key} 的榜线缓存数据")
 
-        data, request_time = await self.request_rankings(event_id, url)
-        ret['request_time'] = request_time
+        req_start = datetime.now().timestamp()
+        try:
+            data, request_time = await self.request_rankings(event_id, url)
+            ret['request_time'] = request_time
+        except Exception as e:
+            ret['request_time'] = datetime.now().timestamp() - req_start
+            self.error(f"请求榜线数据失败（重试3次后）: {get_exc_desc(e)}")
+            return ret
 
         if not data:
             return ret

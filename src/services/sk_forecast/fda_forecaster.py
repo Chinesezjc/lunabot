@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from scipy.optimize import curve_fit
 from scipy.spatial.distance import euclidean
+from datetime import datetime
 import warnings
 
 warnings.filterwarnings('ignore')
@@ -16,9 +17,13 @@ class FDAForecaster:
         
     def _preprocess_data(self, df: pd.DataFrame) -> pd.DataFrame:
         data = df.copy()
-        data['date'] = pd.to_datetime(data['timestamp'])
+        data['date'] = data['timestamp'].apply(datetime.fromtimestamp)
         data = data.sort_values('from_start_hour')
         data = data.drop_duplicates(subset=['from_start_hour'], keep='last')
+
+        event_start = None
+        if len(data) > 0 and pd.notna(data['date'].iloc[0]):
+            event_start = data['date'].iloc[0] - pd.Timedelta(hours=float(data['from_start_hour'].iloc[0]))
         
         # 重采样到1小时粒度
         data.index = pd.to_timedelta(data['from_start_hour'], unit='h')
@@ -38,9 +43,8 @@ class FDAForecaster:
             resampled['to_end_hour'] = total_duration - resampled['from_start_hour']
         
         # 补充时间特征
-        start_date = resampled['date'].iloc[0]
-        if pd.notna(start_date):
-            resampled['date'] = [start_date + pd.Timedelta(hours=h) for h in resampled['from_start_hour']]
+        if event_start is not None:
+            resampled['date'] = [event_start + pd.Timedelta(hours=h) for h in resampled['from_start_hour']]
             
         resampled['weekday'] = resampled['date'].dt.dayofweek
         resampled['hour_of_day'] = resampled['date'].dt.hour
@@ -109,12 +113,19 @@ class FDAForecaster:
         top_k = [item[1] for item in scores[:self.n_neighbors]]
         
         # 如果找不到足够的邻居（比如当前活动比所有历史活动都长），这就需要降级处理
-        # 这里简单返回能找到的所有
+        # 这里退化为使用所有历史活动平均形态，避免后期活动直接失败
+        if not top_k:
+            return self.history_profiles
         return top_k
 
     def _generate_weighted_reference(self, neighbors: list[dict], target_duration: int) -> np.array:
         if not neighbors:
-            return np.ones(target_duration) # Fallback
+            return (
+                np.ones(self.start_phase_hours),
+                np.ones(self.end_phase_hours),
+                {},
+                1.0,
+            )
 
         # 这里我们需要处理不同长度的邻居。
         # 策略：分解为 Start, Body, End 进行平均，就像之前的逻辑一样，
@@ -180,8 +191,8 @@ class FDAForecaster:
         return ref_start, ref_end, avg_body_factors, global_avg
 
     def forecast(self, current_data: pd.DataFrame) -> pd.DataFrame:
-        if len(self.history_profiles) < self.n_neighbors:
-            raise ValueError("Not enough history profiles to perform forecasting.")
+        if not self.history_profiles:
+            raise ValueError("No history profiles available for forecasting.")
 
         # 1. 预处理当前数据
         df_clean = self._preprocess_data(current_data)
@@ -290,6 +301,6 @@ class FDAForecaster:
             'score': future_scores,
             'from_start_hour': future_hours,
             'to_end_hour': total_duration - future_hours,
-            'timestamp': [d.timestamp() for d in future_dates]
+            'timestamp': [int(d.to_pydatetime().timestamp()) for d in future_dates]
         })
         return result_df[['score', 'from_start_hour', 'to_end_hour', 'timestamp']]

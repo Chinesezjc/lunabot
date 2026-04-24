@@ -26,8 +26,10 @@ from .sk_forecast import (
     save_rankings_to_csv,
     get_local_forecast_history_csv_path,
 )
+from pathlib import Path
 import zipfile
 from matplotlib import pyplot as plt
+from matplotlib import font_manager as mpl_font_manager
 import matplotlib.dates as mdates
 import matplotlib.colors as mcolors
 import matplotlib
@@ -35,7 +37,39 @@ import matplotlib.cm as cm
 import numpy as np
 import subprocess
 
-FONT_NAME = "Source Han Sans CN"
+DEFAULT_MPL_FONT_NAME = "Source Han Sans CN"
+BUILTIN_MPL_FONT_PATHS = [
+    Path(__file__).resolve().parents[4] / "data" / "utils" / "fonts" / name
+    for name in [
+        "SourceHanSansCN-Regular.otf",
+        "SourceHanSansCN-Bold.otf",
+        "SourceHanSansCN-Heavy.otf",
+    ]
+]
+
+
+def register_matplotlib_font() -> str:
+    configured_font_name = global_config.get("font.name", default=None, raise_exc=False)
+    configured_font_path = global_config.get("font.path", default=None, raise_exc=False)
+    font_paths = []
+    if configured_font_path:
+        font_paths.append(Path(configured_font_path).expanduser())
+    font_paths.extend(BUILTIN_MPL_FONT_PATHS)
+
+    font_name = None
+    for path in font_paths:
+        if not path.exists():
+            continue
+        try:
+            mpl_font_manager.fontManager.addfont(str(path))
+            if font_name is None:
+                font_name = mpl_font_manager.FontProperties(fname=str(path)).get_name()
+        except Exception:
+            continue
+    return font_name or configured_font_name or DEFAULT_MPL_FONT_NAME
+
+
+FONT_NAME = register_matplotlib_font()
 plt.switch_backend('agg')
 matplotlib.rcParams['font.family'] = [FONT_NAME]
 matplotlib.rcParams['axes.unicode_minus'] = False  
@@ -1737,4 +1771,3 @@ async def compress_ranking_data():
             
             await run_in_pool(sync)
         
-

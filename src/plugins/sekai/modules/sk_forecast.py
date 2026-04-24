@@ -212,16 +212,37 @@ async def get_moe_forecast_data(region: str, event_id: int, chapter_id: int | No
     #         data.rank_data[rank] = RankForecastData(final_score=pred)
 
     # 从公开API获取
-    resp = await download_json(cfg['url'].format(region=region + '/' if region != 'cn' else '', event_id=event_id))
-    for item in resp.get('data', {}).get('charts', []):
-        rank = int(item['Rank'])
-        if rank not in cfg['ranks']:
-            continue
-        pred_score = int(item['PredictedScore'])
-        data.rank_data[rank] = RankForecastData(final_score=pred_score)
+    resp = await download_json(cfg['url'].format(region=region, event_id=event_id))
+
+    # 兼容旧版 data.charts 和新版 items 两种返回结构
+    charts = resp.get('data', {}).get('charts', [])
+    if charts:
+        for item in charts:
+            rank = int(item['Rank'])
+            if rank not in cfg['ranks']:
+                continue
+            if item.get('PredictedScore') is None:
+                continue
+            pred_score = int(item['PredictedScore'])
+            data.rank_data[rank] = RankForecastData(final_score=pred_score)
+    else:
+        for item in resp.get('items', []):
+            rank = int(item['rank'])
+            if rank not in cfg['ranks']:
+                continue
+            if item.get('prediction') is None:
+                continue
+            pred_score = int(item['prediction'])
+            data.rank_data[rank] = RankForecastData(final_score=pred_score)
     if not data.rank_data:
         raise GetForecastException("最新活动预测未更新")
-    data.forecast_ts = int(resp['timestamp'] / 1000)
+
+    if resp.get('timestamp'):
+        data.forecast_ts = int(resp['timestamp'] / 1000)
+    elif resp.get('updated_at'):
+        data.forecast_ts = int(datetime.fromisoformat(resp['updated_at'].replace('Z', '+00:00')).timestamp())
+    else:
+        data.forecast_ts = int(time.time())
 
     return data
 

@@ -69,6 +69,16 @@ EVENT_TYPE_SHOW_NAMES = {
     "world_bloom": "WorldLink",
 }
 
+_INFERRED_CARD_SUPPLY_TYPES: Dict[str, Dict[int, str]] = {}
+_GACHA_SUMMARY_CARD_SUPPLY_MARKERS = [
+    ("ブルームフェスティバル限定", "bloom_festival_limited"),
+    ("カラフルフェスティバル限定", "colorful_festival_limited"),
+    ("ユニットイベント限定", "unit_event_limited"),
+    ("ユニイベ限定", "unit_event_limited"),
+    ("コラボ限定", "collaboration_limited"),
+    ("期間限定", "term_limited"),
+]
+
 @dataclass
 class EventListFilter:
     attr: str = None
@@ -92,13 +102,67 @@ def get_left_transparent_width(img: Image.Image) -> int:
     return left_width
 
 # 判断某个卡牌id的限定类型
+def _get_gacha_summary(gacha) -> str:
+    if isinstance(gacha, dict):
+        return gacha.get("gachaInformation", {}).get("summary", "") or ""
+    return getattr(gacha, "summary", "") or ""
+
+def _get_gacha_pickup_card_ids(gacha) -> List[int]:
+    if isinstance(gacha, dict):
+        return [pickup["cardId"] for pickup in gacha.get("gachaPickups", [])]
+    return [card.id for card in getattr(gacha, "cards", []) if getattr(card, "is_pickup", False)]
+
+def _infer_card_supply_type_from_gacha_summary(summary: str, card: dict) -> Optional[str]:
+    prefix = card.get("prefix")
+    if not prefix:
+        return None
+    card_pos = summary.find(f"[{prefix}]")
+    if card_pos < 0:
+        return None
+
+    window = summary[max(0, card_pos - 1000):card_pos]
+    matched_markers = [
+        (window.rfind(marker), supply_type)
+        for marker, supply_type in _GACHA_SUMMARY_CARD_SUPPLY_MARKERS
+        if marker in window
+    ]
+    if not matched_markers:
+        return None
+    return max(matched_markers, key=lambda x: x[0])[1]
+
+async def _get_inferred_card_supply_types(ctx: SekaiHandlerContext) -> Dict[int, str]:
+    if ctx.region in _INFERRED_CARD_SUPPLY_TYPES:
+        return _INFERRED_CARD_SUPPLY_TYPES[ctx.region]
+
+    cards = await ctx.md.cards.get()
+    cards_by_id = {card["id"]: card for card in cards}
+    inferred_types: Dict[int, str] = {}
+    for gacha in await ctx.md.gachas.get():
+        summary = _get_gacha_summary(gacha)
+        if not summary:
+            continue
+        for card_id in _get_gacha_pickup_card_ids(gacha):
+            card = cards_by_id.get(card_id)
+            if not card:
+                continue
+            supply_type = _infer_card_supply_type_from_gacha_summary(summary, card)
+            if supply_type:
+                inferred_types[card_id] = supply_type
+
+    _INFERRED_CARD_SUPPLY_TYPES[ctx.region] = inferred_types
+    return inferred_types
+
 async def get_card_supply_type(ctx: SekaiHandlerContext, cid: int) -> str:
     ctx = SekaiHandlerContext.from_region("jp")
     card = await ctx.md.cards.find_by_id(cid)
-    if not card or 'cardSupplyId' not in card:
+    if not card:
         return "normal"
-    if card_supply := await ctx.md.card_supplies.find_by_id(card["cardSupplyId"]):
-        return card_supply["cardSupplyType"]
+    if 'cardSupplyId' in card and (card_supply := await ctx.md.card_supplies.find_by_id(card["cardSupplyId"])):
+        supply_type = card_supply["cardSupplyType"]
+        if supply_type != "normal":
+            return supply_type
+    if inferred_supply_type := (await _get_inferred_card_supply_types(ctx)).get(cid):
+        return inferred_supply_type
     return "normal"
 
 # 获取某个活动详情

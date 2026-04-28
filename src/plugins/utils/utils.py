@@ -913,6 +913,7 @@ async def adump_json(data: dict, path: str):
     """
     return await run_in_pool(dump_json, data, path)
 
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(1), reraise=True)
 async def download_json(url: str) -> dict:
     """
     异步下载json文件

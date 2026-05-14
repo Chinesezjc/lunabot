@@ -26,6 +26,7 @@ from .music import (
     get_music_diff_info,
     get_musicmetas,
     get_musicmetas_json,
+    LEADERBOARD_LIVETYPE_PLAY_INTERVAL,
 )
 from .mysekai import MYSEKAI_REGIONS
 from sekai_deck_recommend_cpp import (
@@ -94,7 +95,8 @@ MAX_PROFILE_KEYWORDS = ('顶配', '满配',)
 SUB_MAX_PROFILE_KEYWORDS = ('次顶配', '次满配', '中配',)
 CURRENT_DECK_KEYWORDS = ('当前', '目前')
 
-MUSIC_COMPARE_KEYWORDS = ('歌曲比较', '歌曲排行', '歌曲排名', '歌曲推荐',)
+MUSIC_COMPARE_KEYWORDS = ('歌曲比较', '歌曲排行', '歌曲排名', '歌曲推荐', '歌曲对比')
+WAR_PREPARE_KEYWORDS = ('战备', '备战')
 MUSIC_COMPARE_DEFAULT_MUSIC_NUM = 8
 MUSIC_COMPARE_CANDIDATE_MUSIC_NUM = 40
 MUSCI_COMPARE_MAX_MUSIC_NUM = 5
@@ -135,6 +137,69 @@ NOCHANGE_CARD_CONFIG.canvas = False
 
 DEFAULT_TEAMMATE_POWER = 250000
 DEFAULT_TEAMMATE_SCOREUP = 200
+
+
+def extract_war_prepare_options(args: str) -> tuple[dict, str]:
+    ret = {}
+
+    for keyword in WAR_PREPARE_KEYWORDS:
+        if keyword in args:
+            ret['war_prepare'] = True
+            args = args.replace(keyword, "", 1).strip()
+            break
+
+    round_match = re.search(r'(\d+(?:\.\d+)?)周回', args)
+    if round_match:
+        ret['rounds_per_hour'] = float(round_match.group(1))
+        if ret['rounds_per_hour'] <= 0:
+            raise ReplyException("周回数必须大于0")
+        args = args.replace(round_match.group(0), "", 1).strip()
+
+    pt_patterns = (
+        ('current_pt', r'(?:现在|今|现)\s*([0-9][0-9,._]*(?:\.\d+)?(?:k|w|e|万|百万|亿)?)'),
+        ('target_pt', r'目标\s*([0-9][0-9,._]*(?:\.\d+)?(?:k|w|e|万|百万|亿)?)'),
+    )
+    for key, pattern in pt_patterns:
+        match = re.search(pattern, args)
+        if not match:
+            continue
+        try:
+            ret[key] = parse_large_number(match.group(1))
+        except Exception:
+            raise ReplyException(f"解析{ '当前PT' if key == 'current_pt' else '目标PT' }失败: {match.group(0)}")
+        args = args.replace(match.group(0), "", 1).strip()
+
+    return ret, args.strip()
+
+
+def format_large_number_by_4(num: int | float) -> str:
+    s = str(int(num))
+    parts = []
+    while len(s) > 4:
+        parts.append(s[-4:])
+        s = s[:-4]
+    parts.append(s)
+    return ','.join(reversed(parts))
+
+
+def format_hours_minutes(total_hours: float) -> str:
+    total_minutes = max(0, math.ceil(total_hours * 60))
+    hours = total_minutes // 60
+    minutes = total_minutes % 60
+    return f"{hours}小时{minutes}分钟"
+
+
+def format_wan_number(num: int | float, digits: int = 4) -> str:
+    value = float(num) / 10000.0
+    text = f"{value:.{digits}f}".rstrip('0').rstrip('.')
+    return f"{text}万"
+
+
+def format_hhmm_short(total_hours: float) -> str:
+    total_minutes = max(0, math.ceil(total_hours * 60))
+    hours = total_minutes // 60
+    minutes = total_minutes % 60
+    return f"{hours}h{minutes:02d}min"
 
 
 def add_payload_segment(payloads: list[bytes], data: bytes):
@@ -772,6 +837,9 @@ async def extract_music_and_diff(
 # 从args中提取不在options中的参数
 def extract_addtional_options(args: str) -> Tuple[dict, str]:
     ret = {}
+
+    war_prepare, args = extract_war_prepare_options(args)
+    ret.update(war_prepare)
 
     for boost in reversed(BOOST_BONUS_DICT.keys()):
         for keyword in BOOST_KEYWORDS:
@@ -1533,6 +1601,17 @@ async def compose_deck_recommend_image(
         else:
             recommend_type = "no_event"
 
+    war_prepare = additional.get('war_prepare', False)
+    if war_prepare:
+        assert_and_reply(recommend_type not in ("challenge", "challenge_all", "no_event", "bonus", "wl_bonus"),
+                         "备战模式仅支持有活动PT结果的组卡")
+        assert_and_reply(additional.get('boost') is not None,
+                         "备战模式必须指定火耗参数，例如\"5火\"")
+        assert_and_reply(additional.get('target_pt') is not None,
+                         "你还没有输入目标PT！例：目标300万/300w（请以1或万为单位，方便程序解析）")
+        assert_and_reply(not additional.get('music_compare', False),
+                         "备战模式暂不支持和歌曲比较同时使用")
+
     # ---------------------------- 处理额外参数 ---------------------------- #
             
     # 是否是顶配租卡
@@ -1626,15 +1705,19 @@ async def compose_deck_recommend_image(
                 else:
                     # suite中没有该卡，提示需要抓包更新
                     raise ReplyException(f"当前卡组中的卡牌 {bp_card['cardId']} 不在Suite数据中，请更新抓包数据")
-
-    # 如果卡组完全固定则只需要跑一种算法，并删除profile中除固定以外的其他卡牌以减少开销
+    '''
+    如果卡组完全固定则只需要跑一种算法
+    普通组卡可以裁掉非固定卡来减少开销，但 WL 仍然需要整份卡池来计算支援卡组加成
+    否则固定 5 张前排后，支援候选只剩前排本身，去重后会变成 0
+    '''
     is_deck_fixed = options.fixed_cards and len(options.fixed_cards) == 5 or use_current_deck
     if is_deck_fixed:
         options.algorithm = "dfs"
-        profile.userCards = [
-            uc for uc in profile.userCards
-            if uc['cardId'] in options.fixed_cards
-        ]
+        if not is_wl:
+            profile.userCards = [
+                uc for uc in profile.userCards
+                if uc['cardId'] in options.fixed_cards
+            ]
 
     # 业务前置校验：避免把空卡池问题交给组卡后端并透传 5xx
     if not profile.userCards:
@@ -1803,6 +1886,10 @@ async def compose_deck_recommend_image(
         result_decks = [d for _, d in result_music_decks]
         music_diffs_to_compare = [md for md, _ in result_music_decks]
 
+    if war_prepare:
+        result_decks = result_decks[:1]
+        result_algs = result_algs[:1]
+
     # ---------------------------- 绘图数据获取 ---------------------------- #
 
     # jp_ctx = SekaiHandlerContext.from_region('jp')
@@ -1817,6 +1904,61 @@ async def compose_deck_recommend_image(
             music_title = truncate(music['title'], 20)
             music_title += f" ({options.music_diff.upper()})"
             music_cover = await get_music_cover_thumb(ctx, options.music_id)
+
+    war_prepare_info = None
+    if war_prepare and result_decks:
+        deck = result_decks[0]
+        base_pt = deck.score
+        if recommend_type == "mysekai":
+            base_pt = deck.mysekai_event_point
+        boost = additional['boost']
+        single_play_pt = int(base_pt * BOOST_BONUS_DICT[boost])
+
+        manual_rounds_per_hour = additional.get('rounds_per_hour')
+        if manual_rounds_per_hour is not None:
+            rounds_per_hour = manual_rounds_per_hour
+            rounds_source = "玩家设置"
+        else:
+            musicmetas = add_omakase_music(await get_musicmetas_json(ctx.region).get())
+            meta = find_by_predicate(
+                musicmetas,
+                lambda x: x['music_id'] == options.music_id and x['difficulty'] == options.music_diff,
+            )
+            assert_and_reply(meta is not None, "找不到当前歌曲的周回数据，无法计算备战信息")
+            live_type_to_leaderboard = {
+                'solo': 'solo',
+                'multi': 'multi',
+                'auto': 'auto',
+                'cheerful': 'multi',
+            }
+            leaderboard_live_type = live_type_to_leaderboard.get(options.live_type)
+            assert_and_reply(leaderboard_live_type is not None, "当前LIVE类型暂不支持备战模式")
+            play_interval = LEADERBOARD_LIVETYPE_PLAY_INTERVAL[leaderboard_live_type]
+            rounds_per_hour = 3600 / (meta['music_time'] + play_interval)
+            rounds_source = "系统默认"
+
+        current_pt = additional.get('current_pt', 0)
+        target_pt = additional['target_pt']
+        remain_pt = max(0, target_pt - current_pt)
+        required_games = math.ceil(remain_pt / single_play_pt) if remain_pt > 0 else 0
+        estimated_hours = required_games / rounds_per_hour if rounds_per_hour > 0 else 0
+        hourly_pt = int(single_play_pt * rounds_per_hour)
+        total_boost_cost = required_games * boost
+
+        war_prepare_info = {
+            'current_pt': current_pt,
+            'target_pt': target_pt,
+            'remain_pt': remain_pt,
+            'single_play_pt': single_play_pt,
+            'rounds_per_hour': rounds_per_hour,
+            'rounds_source': rounds_source,
+            'manual_rounds_per_hour': manual_rounds_per_hour,
+            'hourly_pt': hourly_pt,
+            'required_games': required_games,
+            'estimated_hours': estimated_hours,
+            'total_boost_cost': total_boost_cost,
+            'boost': boost,
+        }
 
     # 获取活动banner和标题
     live_name = "协力"
@@ -2109,6 +2251,53 @@ async def compose_deck_recommend_image(
 
                 # 表格
                 gh, vsp, voffset = 120, 12, 18
+                if war_prepare_info is not None:
+                    rounds_text = f"{war_prepare_info['rounds_per_hour']:.0f}" \
+                        if abs(war_prepare_info['rounds_per_hour'] - round(war_prepare_info['rounds_per_hour'])) < 0.05 \
+                        else f"{war_prepare_info['rounds_per_hour']:.1f}".rstrip('0').rstrip('.')
+                    prep_key_style = TextStyle(font=DEFAULT_BOLD_FONT, size=30, color=(88, 92, 118))
+                    prep_value_style = TextStyle(font=DEFAULT_BOLD_FONT, size=30, color=(40, 40, 40))
+                    prep_note_style = TextStyle(font=DEFAULT_BOLD_FONT, size=26, color=(88, 92, 118))
+                    def prep_pair(icon: str, label: str, value: str):
+                        with HSplit().set_content_align('l').set_item_align('c').set_sep(0):
+                            TextBox(f"{icon} {label}", prep_key_style)
+                            TextBox(value, prep_value_style)
+
+                    with VSplit().set_content_align('lt').set_item_align('lt').set_sep(10).set_padding(16).set_bg(roundrect_bg()):
+                        if war_prepare_info['current_pt'] > 0:
+                            with HSplit().set_content_align('l').set_item_align('lt').set_sep(28):
+                                with VSplit().set_content_align('lt').set_item_align('lt').set_sep(10):
+                                    prep_pair("🙌", "当前PT:", format_wan_number(war_prepare_info['current_pt']))
+                                    prep_pair("📉", "差值:", format_wan_number(war_prepare_info['remain_pt']))
+                                    prep_pair("🎮", "预计局数:", str(war_prepare_info['required_games']))
+                                with VSplit().set_content_align('lt').set_item_align('lt').set_sep(10):
+                                    prep_pair("🎯", "目标PT:", format_wan_number(war_prepare_info['target_pt']))
+                                    prep_pair("♻️", "周回数:", f"{war_prepare_info['rounds_source']}({rounds_text})")
+                                    prep_pair("⏰", "预计时间:", format_hhmm_short(war_prepare_info['estimated_hours']))
+                                with VSplit().set_content_align('lt').set_item_align('lt').set_sep(10):
+                                    Spacer(h=34)
+                                    prep_pair("🚀", "时速:", format_wan_number(war_prepare_info['hourly_pt']))
+                                    prep_pair("🔋", "预计火耗:", str(war_prepare_info['total_boost_cost']))
+                            with HSplit().set_content_align('l').set_item_align('c').set_sep(0):
+                                TextBox("🔥 按", prep_note_style)
+                                TextBox(str(war_prepare_info['boost']), prep_value_style)
+                                TextBox("火计算单局PT", prep_note_style)
+                        else:
+                            with HSplit().set_content_align('l').set_item_align('lt').set_sep(28):
+                                with VSplit().set_content_align('lt').set_item_align('lt').set_sep(10):
+                                    prep_pair("🎯", "目标PT:", format_wan_number(war_prepare_info['target_pt']))
+                                    prep_pair("🎮", "预计局数:", str(war_prepare_info['required_games']))
+                                    with HSplit().set_content_align('l').set_item_align('c').set_sep(0):
+                                        TextBox("🔥 按", prep_note_style)
+                                        TextBox(str(war_prepare_info['boost']), prep_value_style)
+                                        TextBox("火计算单局PT", prep_note_style)
+                                with VSplit().set_content_align('lt').set_item_align('lt').set_sep(10):
+                                    prep_pair("♻️", "周回数:", f"{war_prepare_info['rounds_source']}({rounds_text})")
+                                    prep_pair("⏰", "预计时间:", format_hhmm_short(war_prepare_info['estimated_hours']))
+                                with VSplit().set_content_align('lt').set_item_align('lt').set_sep(10):
+                                    prep_pair("🚀", "时速:", format_wan_number(war_prepare_info['hourly_pt']))
+                                    prep_pair("🔋", "预计火耗:", str(war_prepare_info['total_boost_cost']))
+
                 with VSplit().set_content_align('c').set_item_align('c').set_sep(16).set_padding(16).set_bg(roundrect_bg()):
                     if len(result_decks) > 0:
                         with HSplit().set_content_align('c').set_item_align('c').set_sep(16).set_padding(0):

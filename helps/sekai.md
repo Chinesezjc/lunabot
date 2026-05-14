@@ -860,7 +860,9 @@ mnr1箱对应的卡池: `eventmnr1`
 
     - **模拟一个团名+颜色加成的活动** `mmj 绿`
 
-    - **模拟WL活动** `wl1 miku` `wl2 miku`
+    - **模拟混团+颜色加成的活动** `%an saki hrk emu mzk vbs葱 @橙` 
+
+    - **模拟WL活动** `wl1 miku` `wl2 miku` `wl3 miku`
 
 - **协力相关**
 

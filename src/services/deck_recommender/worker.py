@@ -56,6 +56,11 @@ class Worker:
         log += f"mdiff={options.music_diff}, "
         log += f"eid={options.event_id}, "
         log += f"wl_cid={options.world_bloom_character_id}, "
+        log += f"custom_bonus_attr={getattr(options, 'custom_bonus_attr', None)}, "
+        custom_bonus_cids = getattr(options, 'custom_bonus_character_ids', None) or []
+        log += f"custom_bonus_cids={list(custom_bonus_cids)}, "
+        custom_bonus_support_units = getattr(options, "custom_bonus_character_support_units", None)
+        log += f"custom_bonus_support_units={custom_bonus_support_units}, "
         log += f"challenge_cid={options.challenge_live_character_id}, "
         log += f"limit={options.limit}, "
         # log += f"member={options.member}, "
@@ -137,6 +142,24 @@ class Worker:
                     'status': 'error',
                     'message': '组卡服务端找不到对应的用户数据缓存'
                 }
+
+            # 兼容字段名：custom_bonus_support_units -> custom_bonus_character_support_units
+            if (
+                "custom_bonus_character_support_units" not in options
+                and "custom_bonus_support_units" in options
+            ):
+                options["custom_bonus_character_support_units"] = options.get("custom_bonus_support_units")
+
+            # 标准化 key 为 int
+            support_units = options.get("custom_bonus_character_support_units")
+            if isinstance(support_units, dict):
+                normalized_support_units = {}
+                for k, v in support_units.items():
+                    try:
+                        normalized_support_units[int(k)] = v
+                    except Exception:
+                        continue
+                options["custom_bonus_character_support_units"] = normalized_support_units if normalized_support_units else None
 
             options = DeckRecommendOptions.from_dict(options)
             options.user_data = user_data
@@ -251,6 +274,4 @@ class WorkerContext:
     async def recommend(self, region: str, options: dict, userdata_hash: str) -> dict:
         self.task_queues[self.worker.worker_id].put(('recommend', (region, options, userdata_hash,), {},))
         return await self._get_result()
-
-
 

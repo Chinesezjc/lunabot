@@ -539,6 +539,7 @@ class RegionMasterDataCollection:
         self.honors                                                         = RegionMasterDataWrapper(region, "honors")
         self.honor_groups                                                   = RegionMasterDataWrapper(region, "honorGroups")
         self.bonds_honnors                                                  = RegionMasterDataWrapper(region, "bondsHonors")
+        self.bonds_honor_words                                              = RegionMasterDataWrapper(region, "bondsHonorWords")
         self.mysekai_materials                                              = RegionMasterDataWrapper(region, "mysekaiMaterials")
         self.mysekai_items                                                  = RegionMasterDataWrapper(region, "mysekaiItems")
         self.mysekai_fixtures                                               = RegionMasterDataWrapper(region, "mysekaiFixtures")

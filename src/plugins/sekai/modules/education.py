@@ -10,7 +10,37 @@ from .profile import (
     get_detailed_profile_card,
     get_detailed_profile_card_filter,
     get_player_avatar_info_by_detailed_profile,
+    CHAR_MISSION_SHORT_NAMES,
+    _draw_single_progress,
 )
+
+CHARACTER_RANK_ALL_KEYWORDS = ("all", "全部", "全量", "总表", "表格")
+CHARACTER_RANK_MISSION_TYPE_ALIASES = {
+    "play_live": ["队长次数", "角色次数", "队长游玩次数", "角色游玩次数", "队长", "队长次数ex", "队长次数(ex)", "队长次数（ex）", "角色次数ex"],
+    "waiting_room": ["休息室次数", "休息室", "控制室", "休息室次数ex", "休息室次数(ex)", "休息室次数（ex）"],
+    "collect_costume_3d": ["服装", "衣装", "服装数量", "衣装数量"],
+    "collect_stamp": ["表情", "贴纸", "贴纸数量", "表情数量"],
+    "read_area_talk": ["区域对话"],
+    "read_card_episode_first": ["卡面剧情前篇", "前篇", "前编"],
+    "read_card_episode_second": ["卡面剧情后篇", "后篇", "后编"],
+    "collect_another_vocal": ["another vocal", "anvo"],
+    "area_item_level_up_character": ["单人家具升级次数", "单人家具", "单人道具"],
+    "area_item_level_up_unit": ["团家具升级次数", "团家具"],
+    "area_item_level_up_reality_world": ["属性道具（树&花）升级次数", "树花", "属性家具", "属性道具", "植物"],
+    "collect_member": ["卡面", "图鉴", "成员"],
+    "skill_level_up_rare": ["技能等级升级次数（★4&生日卡）", "4星技能", "四星技能", "四星slv", "4星slv"],
+    "skill_level_up_standard": ["技能等级升级次数（★1~★3）", "低星技能", "低星slv"],
+    "master_rank_up_rare": ["专精等级升级次数（★4&生日卡）", "4星专精", "四星专精", "四星突破", "4星突破", "4星mr", "四星mr"],
+    "master_rank_up_standard": ["专精等级升级次数（★1~★3）", "低星专精", "低星突破", "低星mr"],
+    "collect_character_archive_voice": ["台词", "语音"],
+    "collect_mysekai_fixture": ["mysekai家具数量", "ms家具", "烤森家具"],
+    "collect_mysekai_canvas": ["mysekai画布数量", "ms画布", "烤森画布"],
+    "read_mysekai_fixture_unique_character_talk": ["mysekai对话", "ms对话", "烤森对话"],
+}
+for mission_type, short_name in CHAR_MISSION_SHORT_NAMES.items():
+    normalized = short_name.lower().replace(" ", "").replace("（", "(").replace("）", ")")
+    CHARACTER_RANK_MISSION_TYPE_ALIASES.setdefault(mission_type, []).append(normalized)
+    CHARACTER_RANK_MISSION_TYPE_ALIASES[mission_type].append(mission_type.lower())
 
 @dataclass
 class AreaItemFilter:
@@ -29,6 +59,315 @@ UNIT_SEKAI_AREA_IDS = {
     "theme_park": 9,
     "school_refusal": 10,
 }
+
+
+def _normalize_cr_mission_query(text: str) -> str:
+    return text.strip().lower().replace(" ", "").replace("（", "(").replace("）", ")")
+
+
+def extract_character_rank_all_flag(args: str) -> tuple[bool, str]:
+    normalized = _normalize_cr_mission_query(args)
+    for keyword in CHARACTER_RANK_ALL_KEYWORDS:
+        if keyword in normalized:
+            return True, args.replace(keyword, "", 1).strip()
+    return False, args.strip()
+
+
+def extract_character_rank_mission_type(args: str) -> tuple[Optional[str], str]:
+    normalized = _normalize_cr_mission_query(args)
+    pairs: list[tuple[str, str]] = []
+    for mission_type, aliases in CHARACTER_RANK_MISSION_TYPE_ALIASES.items():
+        for alias in aliases:
+            pairs.append((mission_type, alias))
+    pairs.sort(key=lambda x: len(x[1]), reverse=True)
+    for mission_type, alias in pairs:
+        if alias in normalized:
+            return mission_type, ""
+    return None, args.strip()
+
+
+async def compose_character_rank_mission_all_image(
+    ctx: SekaiHandlerContext,
+    qid: int,
+    cid: int,
+    mission_type: str,
+) -> Image.Image:
+    async def get_masterdata_with_local_fallback(name: str):
+        try:
+            return await ctx.md.get(name)
+        except Exception as e:
+            local_path = pjoin(MASTER_DB_CACHE_DIR, ctx.region, f"{name}.json")
+            if os.path.exists(local_path):
+                logger.warning(f"获取 MasterData [{ctx.region}.{name}] 失败，回退到本地文件: {get_exc_desc(e)}")
+                return load_json(local_path)
+            raise e
+
+    profile, err_msg = await get_detailed_profile(
+        ctx,
+        qid,
+        filter=get_detailed_profile_card_filter("userCharacterMissionV2s", "userCharacterMissionV2Statuses", "userCharacters"),
+        raise_exc=True,
+    )
+
+    master_missions = await get_masterdata_with_local_fallback("characterMissionV2s")
+    parameter_groups = await get_masterdata_with_local_fallback("characterMissionV2ParameterGroups")
+
+    user_v2s = [item for item in (profile.get("userCharacterMissionV2s", []) or []) if item.get("characterId") == cid]
+    user_statuses = [item for item in (profile.get("userCharacterMissionV2Statuses", []) or []) if item.get("characterId") == cid]
+
+    chara = await ctx.md.game_characters.find_by_id(cid)
+    chara_name = f"{chara.get('firstName', '')}{chara.get('givenName', '')}" if chara else (get_character_first_nickname(cid) or str(cid))
+
+    def build_section(target_mission_type: str) -> dict:
+        mission = find_by_predicate(
+            [m for m in master_missions if int(m.get("characterId", 0)) == cid],
+            lambda x: x.get("characterMissionType") == target_mission_type,
+        )
+        assert_and_reply(mission is not None, f"找不到该角色的任务类型: {target_mission_type}")
+
+        pgid = int(mission["parameterGroupId"])
+        group_rows = sorted(
+            [item for item in parameter_groups if int(item.get("id", 0)) == pgid],
+            key=lambda x: int(x["seq"])
+        )
+        assert_and_reply(group_rows, f"找不到任务参数组: {pgid}")
+
+        pg_seq_requirements = [(int(item["seq"]), int(item["requirement"])) for item in group_rows]
+        pg_seq_req_exp = [(int(item["seq"]), int(item["requirement"]), int(item.get("exp", 0))) for item in group_rows]
+
+        def get_ex_round_requirement(round_no: int) -> int:
+            req = 0
+            for seq, requirement in pg_seq_requirements:
+                if seq > round_no:
+                    break
+                req = requirement
+            return req
+
+        def get_ex_round_exp(round_no: int) -> int:
+            exp = 0
+            for seq, _, seq_exp in pg_seq_req_exp:
+                if seq > round_no:
+                    break
+                exp = seq_exp
+            return exp
+
+        def calc_ex_round_and_progress(total: int) -> tuple[int, int, int]:
+            total = max(0, int(total))
+            round_no = 1
+            while True:
+                req = get_ex_round_requirement(round_no)
+                if req <= 0 or total < req:
+                    return round_no, total, req
+                total -= req
+                round_no += 1
+
+        def calc_ex_exp_limit_30_rounds() -> int:
+            return sum(get_ex_round_requirement(i) for i in range(1, 31))
+
+        progress_raw = 0
+        for item in user_v2s:
+            if item.get("characterMissionType") == target_mission_type and item.get("progress") is not None:
+                progress_raw = max(progress_raw, int(item["progress"]))
+
+        is_ex = target_mission_type.endswith("_ex")
+        current_total = progress_raw
+        if is_ex:
+            completed_seq_list: list[int] = []
+            for item in user_statuses:
+                if int(item.get("parameterGroupId", 0)) != pgid:
+                    continue
+                if item.get("seq") is None:
+                    continue
+                completed_seq_list.append(int(item["seq"]))
+            received_seq = max(completed_seq_list) if completed_seq_list else 0
+            cleared_total = sum(get_ex_round_requirement(i) for i in range(1, received_seq + 1))
+            if progress_raw < cleared_total:
+                current_total = cleared_total + progress_raw
+            elif progress_raw == 0:
+                current_total = cleared_total
+
+        reached_seq = 0
+        current_round_no = None
+        current_round_progress = None
+        current_round_need = None
+        next_need = None
+        next_exp = None
+        acc_req = 0
+        acc_exp = 0
+        display_rows = []
+        if is_ex:
+            current_round_no, current_round_progress, current_round_need = calc_ex_round_and_progress(current_total)
+            reached_seq = current_round_no
+            max_round = max(
+                current_round_no,
+                max((int(item.get("seq", 0)) for item in user_statuses if int(item.get("parameterGroupId", 0)) == pgid), default=0),
+                max((int(item["seq"]) for item in group_rows), default=0),
+            )
+            for round_no in range(1, max_round + 1):
+                req = get_ex_round_requirement(round_no)
+                exp = get_ex_round_exp(round_no)
+                acc_req += req
+                acc_exp += exp
+                display_rows.append({
+                    "seq": round_no,
+                    "requirement": req,
+                    "acc_requirement": acc_req,
+                    "exp": exp,
+                    "acc_exp": acc_exp,
+                })
+            if current_round_need and current_round_need > 0 and current_round_progress is not None:
+                next_need = current_total + max(current_round_need - current_round_progress, 0)
+                next_exp = get_ex_round_exp(current_round_no)
+        else:
+            for row in group_rows:
+                seq = int(row["seq"])
+                req = int(row["requirement"])
+                exp = int(row.get("exp", 0))
+                acc_req = req
+                acc_exp += exp
+                if current_total >= req:
+                    reached_seq = seq
+                elif next_need is None:
+                    next_need = req
+                    next_exp = exp
+                display_rows.append({
+                    "seq": seq,
+                    "requirement": req,
+                    "acc_requirement": req,
+                    "exp": exp,
+                    "acc_exp": acc_exp,
+                })
+
+        return {
+            "mission_type": target_mission_type,
+            "title": CHAR_MISSION_SHORT_NAMES.get(target_mission_type, target_mission_type),
+            "is_ex": is_ex,
+            "current_total": current_total,
+            "reached_seq": reached_seq,
+            "current_round_no": current_round_no,
+            "current_round_progress": current_round_progress,
+            "current_round_need": current_round_need,
+            "upper": calc_ex_exp_limit_30_rounds() if is_ex else (max((int(row["requirement"]) for row in group_rows), default=0)),
+            "ratio": min(current_total / max(calc_ex_exp_limit_30_rounds(), 1), 1.0) if is_ex else (
+                min(current_total / max((max((int(row["requirement"]) for row in group_rows), default=1)), 1), 1.0)
+            ),
+            "next_need": next_need,
+            "next_exp": next_exp,
+            "display_rows": display_rows,
+        }
+
+    section_types = [mission_type]
+    if mission_type == "play_live":
+        section_types = ["play_live", "play_live_ex"]
+    elif mission_type == "waiting_room":
+        section_types = ["waiting_room", "waiting_room_ex"]
+    sections = [build_section(mt) for mt in section_types]
+
+    title_style = TextStyle(font=DEFAULT_BOLD_FONT, size=26, color=BLACK)
+    style1 = TextStyle(font=DEFAULT_BOLD_FONT, size=20, color=BLACK)
+    style2 = TextStyle(font=DEFAULT_FONT, size=20, color=(50, 50, 50))
+    style3 = TextStyle(font=DEFAULT_BOLD_FONT, size=20, color=(200, 50, 50))
+    sub_header_style = TextStyle(font=DEFAULT_BOLD_FONT, size=22, color=(35, 35, 35, 255))
+
+    gh, vsep, hsep = 40, 6, 6
+    CHUNK_SIZE = 40
+    gw_seq, gw_req, gw_acc_req, gw_exp, gw_acc_exp = 84, 96, 128, 72, 116
+
+    def draw_section_table(section: dict, target_col_count: int | None = None):
+        def bg_fn(i: int, w: Widget):
+            row_seq = w.userdata.get("row_seq")
+            if row_seq == section["reached_seq"] and section["reached_seq"] > 0:
+                return FillBg((255, 244, 196, 210))
+            return FillBg((255, 255, 255, 200)) if i % 2 == 0 else FillBg((255, 255, 255, 100))
+
+        rows = section["display_rows"]
+        if target_col_count and target_col_count > 1:
+            chunk_size = max(1, math.ceil(len(rows) / target_col_count))
+        else:
+            chunk_size = CHUNK_SIZE
+        chunks = [rows[i:i + chunk_size] for i in range(0, len(rows), chunk_size)] or [[]]
+        with VSplit().set_content_align('lt').set_item_align('lt').set_sep(8).set_padding(8).set_bg(roundrect_bg(fill=(255, 255, 255, 120))):
+            TextBox("EX任务" if section["is_ex"] else "普通任务", sub_header_style)
+            with HSplit().set_content_align('lb').set_item_align('lb').set_sep(8):
+                TextBox("当前进度:", style1)
+                TextBox(str(section["current_total"]), style3)
+                if section["is_ex"] and section["current_round_no"] is not None:
+                    TextBox(f"当前回目 EX {section['current_round_no']}", style2)
+                elif section["reached_seq"] > 0:
+                    TextBox(f"已达档位 #{section['reached_seq']}", style2)
+
+            _draw_single_progress(
+                "",
+                section["current_total"],
+                section["upper"],
+                section["ratio"],
+                bar_width=560,
+                bar_color=(255, 145, 84, 255) if section["is_ex"] else (84, 170, 255, 255),
+                title_align='l',
+                title_badge=None,
+                next_need=section.get("next_need"),
+                next_exp=section.get("next_exp"),
+            )
+
+            with HSplit().set_content_align('lt').set_item_align('lt').set_sep(12):
+                for chunk in chunks:
+                    with HSplit().set_content_align('lt').set_item_align('lt').set_sep(hsep):
+                        with VSplit().set_content_align('c').set_item_align('c').set_sep(vsep).set_item_bg(bg_fn):
+                            TextBox("档位", style1).set_size((gw_seq, gh)).set_content_align('c')
+                            for row in chunk:
+                                w = TextBox(f"#{row['seq']}", style2).set_size((gw_seq, gh)).set_content_align('c')
+                                w.userdata["row_seq"] = row["seq"]
+
+                        with VSplit().set_content_align('c').set_item_align('c').set_sep(vsep).set_item_bg(bg_fn):
+                            TextBox("需求", style1).set_size((gw_req, gh)).set_content_align('c')
+                            for row in chunk:
+                                w = TextBox(str(row["requirement"]), style2).set_size((gw_req, gh)).set_content_align('c')
+                                w.userdata["row_seq"] = row["seq"]
+
+                        with VSplit().set_content_align('c').set_item_align('c').set_sep(vsep).set_item_bg(bg_fn):
+                            TextBox("累计需求", style1).set_size((gw_acc_req, gh)).set_content_align('c')
+                            for row in chunk:
+                                w = TextBox(str(row["acc_requirement"]), style2).set_size((gw_acc_req, gh)).set_content_align('c')
+                                w.userdata["row_seq"] = row["seq"]
+
+                        with VSplit().set_content_align('c').set_item_align('c').set_sep(vsep).set_item_bg(bg_fn):
+                            TextBox("EXP", style1).set_size((gw_exp, gh)).set_content_align('c')
+                            for row in chunk:
+                                w = TextBox(str(row["exp"]), style2).set_size((gw_exp, gh)).set_content_align('c')
+                                w.userdata["row_seq"] = row["seq"]
+
+                        with VSplit().set_content_align('c').set_item_align('c').set_sep(vsep).set_item_bg(bg_fn):
+                            TextBox("累计EXP", style1).set_size((gw_acc_exp, gh)).set_content_align('c')
+                            for row in chunk:
+                                w = TextBox(str(row["acc_exp"]), style2).set_size((gw_acc_exp, gh)).set_content_align('c')
+                                w.userdata["row_seq"] = row["seq"]
+
+    with Canvas(bg=SEKAI_BLUE_BG).set_padding(BG_PADDING) as canvas:
+        with VSplit().set_content_align('lt').set_item_align('lt').set_sep(8).set_item_bg(roundrect_bg()):
+            await get_detailed_profile_card(ctx, profile, err_msg)
+
+            with VSplit().set_content_align('lt').set_item_align('lt').set_sep(8).set_padding(8):
+                with HSplit().set_content_align('lb').set_item_align('c').set_sep(8):
+                    ImageBox(get_chara_icon_by_chara_id(cid), size=(48, 48))
+                    title = sections[0]["title"]
+                    if len(sections) == 2:
+                        title = CHAR_MISSION_SHORT_NAMES.get(mission_type, mission_type)
+                    TextBox(f"{chara_name} {title} 任务详览", title_style)
+                TextBox("普通任务高亮栏为已达成的最近档位，EX任务高亮栏为当前进行中的档位", style2)
+
+            normal_section = find_by_predicate(sections, lambda x: not x["is_ex"])
+            normal_col_count = None
+            if normal_section:
+                normal_col_count = max(1, math.ceil(len(normal_section["display_rows"]) / CHUNK_SIZE))
+
+            for section in sections:
+                section_col_count = None
+                if section["is_ex"] and normal_col_count:
+                    section_col_count = normal_col_count
+                draw_section_table(section, section_col_count)
+
+    add_watermark(canvas)
+    return await canvas.get_img()
 
 
 # ======================= 处理逻辑 ======================= #

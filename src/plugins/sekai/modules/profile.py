@@ -959,7 +959,8 @@ async def compose_profile_image(ctx: SekaiHandlerContext, basic_profile: dict, v
         with VSplit().set_sep(16).set_item_bg(ui_bg) as ret:
             with Frame().set_content_align('rb'):
                 hs, vs, gw, gh = 8, 7, 96, 48
-                # 角色等级
+                
+                # 左侧：角色等级
                 with Grid(col_count=6).set_sep(hsep=hs, vsep=vs).set_padding(32):
                     chara_list = [
                         "miku", "rin", "len", "luka", "meiko", "kaito", 
@@ -974,32 +975,51 @@ async def compose_profile_image(ctx: SekaiHandlerContext, basic_profile: dict, v
                             Spacer(gw, gh)
                             continue
                         cid = int(get_cid_by_nickname(chara))
-                        rank = find_by(basic_profile['userCharacters'], 'characterId', cid)['characterRank']
+                        chara_data = find_by(basic_profile['userCharacters'], 'characterId', cid)
+                        rank = chara_data['characterRank'] if chara_data else 1
+                        
                         with Frame().set_size((gw, gh)):
                             chara_img = ctx.static_imgs.get(f'chara_rank_icon/{chara}.png')
                             ImageBox(chara_img, size=(gw, gh), use_alphablend=True)
                             t = TextBox(str(rank), TextStyle(font=DEFAULT_FONT, size=20, color=(40, 40, 40, 255)))
                             t.set_size((60, 48)).set_content_align('c').set_offset((36, 4))
-                
-                # 挑战Live等级
-                if 'userChallengeLiveSoloResult' in basic_profile:
-                    solo_live_result = basic_profile['userChallengeLiveSoloResult']
-                    if isinstance(solo_live_result, list):
-                        solo_live_result = sorted(solo_live_result, key=lambda x: x['highScore'], reverse=True)[0]
-                    cid, score = solo_live_result['characterId'], solo_live_result['highScore']
-                    stages = find_by(basic_profile['userChallengeLiveSoloStages'], 'characterId', cid, mode='all')
-                    stage_rank = max([stage['rank'] for stage in stages])
-                    
-                    with VSplit().set_content_align('c').set_item_align('c').set_padding((32, 64)).set_sep(12):
-                        t = TextBox(f"CHANLLENGE LIVE", TextStyle(font=DEFAULT_FONT, size=18, color=(50, 50, 50, 255)))
-                        t.set_bg(roundrect_bg(radius=6)).set_padding((10, 7))
+
+                # 右侧：Challenge Live + Multi Live
+                with VSplit().set_content_align('c').set_item_align('c').set_padding((50, 36)).set_sep(9):
+                    common_style = TextStyle(font=DEFAULT_FONT, size=18, color=(50, 50, 50, 255))
+                    box_bg = roundrect_bg(radius=6)
+                    box_padding = (10, 7)
+
+                    if 'userChallengeLiveSoloResult' in basic_profile:
+                        solo_live_result = basic_profile['userChallengeLiveSoloResult']
+                        if isinstance(solo_live_result, list):
+                            solo_live_result = sorted(solo_live_result, key=lambda x: x['highScore'], reverse=True)[0]
+                        cid, score = solo_live_result['characterId'], solo_live_result['highScore']
+                        stages = find_by(basic_profile['userChallengeLiveSoloStages'], 'characterId', cid, mode='all')
+                        stage_rank = max([stage['rank'] for stage in stages]) if stages else 0
+
+                        TextBox("CHALLENGE LIVE", common_style).set_bg(box_bg).set_padding(box_padding)
+
                         with Frame():
-                            chara_img = ctx.static_imgs.get(f'chara_rank_icon/{get_character_first_nickname(cid)}.png')
+                            chara_nickname = get_character_first_nickname(cid) if 'get_character_first_nickname' in globals() else str(cid)
+                            chara_img = ctx.static_imgs.get(f'chara_rank_icon/{chara_nickname}.png')
                             ImageBox(chara_img, size=(100, 50), use_alphablend=True)
+
                             t = TextBox(str(stage_rank), TextStyle(font=DEFAULT_FONT, size=22, color=(40, 40, 40, 255)), overflow='clip')
                             t.set_size((50, 50)).set_content_align('c').set_offset((40, 5))
-                        t = TextBox(f"SCORE {score}", TextStyle(font=DEFAULT_FONT, size=18, color=(50, 50, 50, 255)))
-                        t.set_bg(roundrect_bg(radius=6)).set_padding((10, 7))
+
+                        TextBox(f"SCORE  {score}", common_style).set_bg(box_bg).set_padding(box_padding)
+
+                    if 'userMultiLiveTopScoreCount' in basic_profile:
+                        multi_stats = basic_profile['userMultiLiveTopScoreCount']
+                        mvp_count = multi_stats.get('mvp', 0)
+                        ss_count = multi_stats.get('superStar', 0)
+
+                        TextBox("MULTI LIVE", common_style).set_bg(box_bg).set_padding(box_padding)
+
+                        TextBox(f"MVP  {mvp_count}次", common_style).set_bg(box_bg).set_padding(box_padding)
+
+                        TextBox(f"SUPERSTAR  {ss_count}次", common_style).set_bg(box_bg).set_padding(box_padding)
 
             # 卡组（竖版）
             if vertical:

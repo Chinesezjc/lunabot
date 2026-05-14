@@ -61,6 +61,20 @@ class SkillInfo:
     type: str
     detail: str
 
+@dataclass
+class CardSkillDisplayInfo:
+    card: dict
+    pcard: dict | None
+    after_training: bool
+    skill_id: int
+    skill_level: int
+    thumb: Image.Image | None
+    type_label: str
+    score_up: int
+    life_recovery: int
+    detail_text: str
+    group_value: str
+    group_text: str
 
 DETAIL_SKILL_KEYWORDS_IDS = [
     (
@@ -832,10 +846,10 @@ def _parse_box_sort(text: str) -> tuple[str, str]:
     return "default", text
 
 
-def _parse_box_mode(text: str) -> tuple[bool, bool, str]:
+def _parse_box_mode(text: str) -> tuple[bool, bool, str | None, str]:
     """
     解析 /卡牌一览 的模式参数，返回:
-    (is_created_at_mode, group_by_year, new_text)
+    (is_created_at_mode, group_by_year, skill_view_mode, new_text)
     """
     created_at_keywords = ["获取时间一览", "入手时间一览", "时间一览", "获取时间", "入手时间", "obdt", "obat"]
     is_created_at_mode, text, _ = _consume_keyword_once(text, created_at_keywords)
@@ -845,7 +859,320 @@ def _parse_box_mode(text: str) -> tuple[bool, bool, str]:
         group_by_year_keywords = ["按年份", "按年", "year"]
         group_by_year, text, _ = _consume_keyword_once(text, group_by_year_keywords)
 
-    return is_created_at_mode, group_by_year, text
+    skill_view_mode = None
+    skill_type_keywords = ["按技能类型", "技能类型", "技能分类"]
+    skill_score_keywords = ["按技能数值", "按技能值", "技能值", "按加分值", "加分值"]
+    hit, text, _ = _consume_keyword_once(text, skill_score_keywords)
+    if hit:
+        skill_view_mode = "score"
+    else:
+        hit, text, kw = _consume_keyword_once(text, skill_type_keywords)
+        if hit:
+            skill_view_mode = "type"
+        elif "技能" in text:
+            skill_view_mode = "type"
+            text = text.replace("技能", "", 1).strip()
+
+    return is_created_at_mode, group_by_year, skill_view_mode, text
+
+
+def _get_skill_detail_by_level(effect: dict, skill_level: int) -> dict:
+    detail = find_by(effect['skillEffectDetails'], 'level', skill_level)
+    assert_and_reply(detail, f"技能效果ID={effect['id']}缺少技能等级{skill_level}的数据")
+    return detail
+
+
+def _get_skill_type_label(skill_id: int, effect_types: set[str], after_training: bool) -> str:
+    if skill_id == 22:
+        return "bf花后"
+    if skill_id in (23, 24):
+        return "bf花前"
+    if skill_id == 11:
+        return "P分"
+    if skill_id == 12:
+        return "血分"
+    if skill_id == 13:
+        return "判分"
+    if skill_id in (15, 16, 17, 18, 19):
+        return "团分"
+    if 'life_recovery' in effect_types:
+        return "奶卡"
+    if 'judgment_up' in effect_types:
+        return "判卡"
+    if skill_id in (1, 2, 3, 4):
+        return "大分"
+    return "分卡"
+
+def _format_seconds(sec: float | int) -> str:
+    try:
+        sec = float(sec)
+    except:
+        return str(sec)
+    if abs(sec - int(sec)) < 1e-6:
+        return str(int(sec))
+    return f"{sec:.1f}".rstrip('0').rstrip('.')
+
+def _judge_type_to_text(judge_type: str | None) -> str:
+    mapping = {
+        'great': 'GREAT',
+        'good': 'GOOD',
+        'bad': 'BAD',
+    }
+    if not judge_type:
+        return 'GREAT'
+    return mapping.get(judge_type.lower(), str(judge_type).upper())
+
+
+async def get_card_skill_display_infos(
+    ctx: SekaiHandlerContext,
+    card: dict,
+    pcard: dict | None,
+    skill_level: int = 4,
+    show_dual_state: bool = False,
+    user_character_rank: int | None = None,
+) -> List[CardSkillDisplayInfo]:
+    states: List[tuple[bool, int]] = []
+    if show_dual_state:
+        if not only_has_after_training(card):
+            states.append((False, card['skillId']))
+        if has_after_training(card):
+            states.append((True, card.get('specialTrainingSkillId') or card['skillId']))
+    else:
+        if only_has_after_training(card):
+            after_training = True
+        elif has_after_training(card):
+            after_training = pcard.get('defaultImage') == 'special_training' if pcard else True
+        else:
+            after_training = False
+        skill_id = card.get('specialTrainingSkillId') if after_training else card['skillId']
+        states.append((after_training, skill_id or card['skillId']))
+
+    infos: List[CardSkillDisplayInfo] = []
+    for after_training, skill_id in states:
+        skill = await ctx.md.skills.find_by_id(skill_id)
+        assert_and_reply(skill, f"技能ID={skill_id}不存在")
+
+        score_up = 0
+        life_recovery = 0
+        same_unit_enhance = 0
+        character_rank_bonus = 0
+        current_character_rank_bonus = 0
+        has_other_member_reference = False
+        other_member_reference_max = 0
+        different_unit_count_bonus: Dict[int, int] = {}
+        effect_types: set[str] = set()
+        judge_upgrade_duration: float | None = None
+        judge_upgrade_floor: str | None = None
+
+        for effect in skill['skillEffects']:
+            effect_type = effect['skillEffectType']
+            effect_types.add(effect_type)
+            detail = _get_skill_detail_by_level(effect, skill_level)
+            current_value = detail['activateEffectValue']
+            if effect_type in ('score_up', 'score_up_condition_life', 'score_up_keep'):
+                score_up = max(score_up, current_value)
+                if effect.get('skillEnhance'):
+                    same_unit_enhance = max(same_unit_enhance, effect['skillEnhance'].get('activateEffectValue', 0))
+            elif effect_type == 'life_recovery':
+                life_recovery += current_value
+            elif effect_type == 'score_up_character_rank':
+                character_rank_bonus = max(character_rank_bonus, current_value)
+                if user_character_rank is not None:
+                    activate_rank = effect.get('activateCharacterRank', 0) or 0
+                    if activate_rank <= user_character_rank:
+                        current_character_rank_bonus = max(current_character_rank_bonus, current_value)
+            elif effect_type == 'other_member_score_up_reference_rate':
+                has_other_member_reference = True
+                other_member_reference_max = max(other_member_reference_max, detail.get('activateEffectValue2', 0) or 0)
+            elif effect_type == 'score_up_unit_count':
+                different_unit_count_bonus[effect.get('activateUnitCount', 0)] = max(
+                    different_unit_count_bonus.get(effect.get('activateUnitCount', 0), 0),
+                    current_value,
+                )
+            elif effect_type == 'judgment_up':
+                judge_upgrade_duration = detail.get('activateEffectDuration', None)
+                judge_upgrade_floor = effect.get('activateNotesJudgmentType', None)
+
+        peak_score_up = score_up + character_rank_bonus
+        current_score_up = score_up + (current_character_rank_bonus if user_character_rank is not None else character_rank_bonus)
+        if same_unit_enhance:
+            peak_score_up += same_unit_enhance * 5
+            current_score_up += same_unit_enhance * 5
+        if has_other_member_reference:
+            peak_score_up += other_member_reference_max
+            current_score_up += other_member_reference_max
+        if different_unit_count_bonus:
+            peak_score_up += max(different_unit_count_bonus.values())
+            current_score_up += max(different_unit_count_bonus.values())
+
+        type_label = _get_skill_type_label(skill_id, effect_types, after_training)
+        detail_parts = []
+        if 'judgment_up' in effect_types and judge_upgrade_duration is not None:
+            detail_parts.append(f"判定强化 ({_format_seconds(judge_upgrade_duration)}s {_judge_type_to_text(judge_upgrade_floor)})")
+        if life_recovery > 0:
+            detail_parts.append(f"生命回复 {life_recovery}")
+        if peak_score_up > 0:
+            if skill_id == 22 and user_character_rank is not None:
+                detail_parts.append(f"分数提升 {current_score_up}%/{peak_score_up}%")
+            else:
+                detail_parts.append(f"分数提升 {peak_score_up}%")
+        if not detail_parts:
+            detail_parts.append(type_label)
+        detail_text = "\n".join(detail_parts)
+
+        infos.append(CardSkillDisplayInfo(
+            card=card,
+            pcard=pcard,
+            after_training=after_training,
+            skill_id=skill_id,
+            skill_level=skill_level,
+            thumb=None,
+            type_label=type_label,
+            score_up=peak_score_up,
+            life_recovery=life_recovery,
+            detail_text=detail_text,
+            group_value=str(peak_score_up),
+            group_text=type_label,
+        ))
+
+    return infos
+
+
+async def compose_skill_view_image(
+    ctx: SekaiHandlerContext,
+    qid: int,
+    cards: List[dict],
+    show_id: bool,
+    skill_view_mode: str,
+):
+    profile, pmsg = await get_detailed_profile(
+        ctx, qid,
+        filter=get_detailed_profile_card_filter('userCards', 'userCharacters'),
+        raise_exc=True,
+    )
+    pcards = profile['userCards'] if profile else []
+    pcard_map: Dict[int, dict] = {pcard['cardId']: pcard for pcard in pcards}
+    user_characters = profile.get('userCharacters', []) if profile else []
+    character_rank_map: Dict[int, int] = {
+        item.get('characterId'): item.get('characterRank', 0)
+        for item in user_characters if item.get('characterId') is not None
+    }
+
+    display_infos: List[CardSkillDisplayInfo] = []
+    for card in cards:
+        pcard = pcard_map.get(card['id'])
+        if not pcard:
+            continue
+        skill_level = pcard.get('skillLevel', 4)
+        bloom_fes_skill_ids = {22, 23, 24}
+        card_skill_ids = {card['skillId'], card.get('specialTrainingSkillId', card['skillId'])}
+        show_dual_state = card.get('supply_show_name') == 'BloomFes限定' and len(card_skill_ids & bloom_fes_skill_ids) > 0
+        display_infos.extend(await get_card_skill_display_infos(
+            ctx, card, pcard,
+            skill_level=skill_level,
+            show_dual_state=show_dual_state,
+            user_character_rank=character_rank_map.get(card.get('characterId')),
+        ))
+
+    assert_and_reply(display_infos, "查询不到符合条件的卡牌")
+
+    async def get_thumb(info: CardSkillDisplayInfo):
+        draw_pcard = info.pcard.copy() if info.pcard else {
+            'defaultImage': 'special_training' if info.after_training else 'original',
+            'specialTrainingStatus': 'done' if info.after_training else 'none',
+            'level': 0,
+            'masterRank': 0,
+            'skillLevel': info.skill_level,
+        }
+        draw_pcard['defaultImage'] = 'special_training' if info.after_training else 'original'
+        return await get_card_full_thumbnail(ctx, info.card, pcard=draw_pcard, level_label='slv')
+
+    thumbs = await batch_gather(*[get_thumb(info) for info in display_infos])
+    for info, img in zip(display_infos, thumbs):
+        info.thumb = img
+
+    if skill_view_mode == 'score':
+        display_infos.sort(key=lambda x: (-x.score_up, x.type_label, -x.card['releaseAt'], -x.card['id'], x.after_training))
+    else:
+        display_infos.sort(key=lambda x: (x.type_label, -x.score_up, -x.card['releaseAt'], -x.card['id'], x.after_training))
+
+    grouped_infos: Dict[str, List[CardSkillDisplayInfo]] = {}
+    for info in display_infos:
+        key = info.group_value if skill_view_mode == 'score' else info.group_text
+        grouped_infos.setdefault(key, []).append(info)
+
+    if skill_view_mode == 'score':
+        group_keys = sorted(grouped_infos.keys(), key=lambda x: int(x), reverse=True)
+    else:
+        type_order = {
+            'bf花后': 0,
+            'bf花前': 1,
+            '团分': 2,
+            '判分': 3,
+            '血分': 4,
+            'P分': 5,
+            '大分': 6,
+            '判卡': 7,
+            '奶卡': 8,
+            '分卡': 9,
+        }
+        group_keys = sorted(grouped_infos.keys(), key=lambda x: (type_order.get(x, 99), x))
+
+    sz = 100
+    item_width = 360
+    title_style = TextStyle(font=DEFAULT_BOLD_FONT, size=22, color=BLACK)
+    text_style = TextStyle(font=DEFAULT_FONT, size=18, color=(80, 80, 80, 255))
+    effect_label_style = TextStyle(font=DEFAULT_BOLD_FONT, size=17, color=(35, 90, 150))
+    effect_text_style = TextStyle(font=DEFAULT_BOLD_FONT, size=20, color=(20, 20, 20))
+    note_style = TextStyle(font=DEFAULT_BOLD_FONT, size=18, color=(0, 0, 0))
+
+    def draw_skill_card(info: CardSkillDisplayInfo):
+        side_text = info.detail_text
+        text_w = item_width - sz - 16
+        with HSplit().set_content_align('lt').set_item_align('lt').set_sep(12).set_w(item_width):
+            with Frame().set_size((sz, sz)).set_content_align('rt'):
+                ImageBox(info.thumb, size=(sz, sz))
+                supply_name = info.card.get('supply_show_name')
+                if supply_name in ['期间限定', 'UnitEvent限定', '联动限定']:
+                    ImageBox(ctx.static_imgs.get('card/term_limited.png'), size=(int(sz * 0.6), None))
+                elif supply_name in ['ColorfulFes限定', 'BloomFes限定']:
+                    ImageBox(ctx.static_imgs.get('card/fes_limited.png'), size=(int(sz * 0.6), None))
+
+            with VSplit().set_content_align('lt').set_item_align('lt').set_sep(4):
+                if show_id:
+                    TextBox(f"ID: {info.card['id']}", TextStyle(font=DEFAULT_FONT, size=14, color=(100, 100, 100, 255)))
+                TextBox(info.card['prefix'], title_style).set_w(text_w)
+                with VSplit().set_content_align('lt').set_item_align('lt').set_sep(2).set_padding(2):
+                    TextBox("技能效果", effect_label_style)
+                    TextBox(side_text, effect_text_style, use_real_line_count=True).set_w(text_w)
+
+    with Canvas(bg=SEKAI_BLUE_BG).set_padding(BG_PADDING) as canvas:
+        with VSplit().set_content_align('lt').set_item_align('lt').set_sep(16):
+            await get_detailed_profile_card(ctx, profile, pmsg)
+
+            current_view = "技能值" if skill_view_mode == 'score' else "技能类型"
+            switch_view = "技能类型" if skill_view_mode == 'score' else "技能值"
+            note = f"""
+当前视图为按【{current_view}】分类，使用【{switch_view}】参数切换到对应视图
+分卡技能持续时间均为5s，特殊分卡各种条件不再赘述，【技能值】视图按当前技能最大值分组
+考虑到布局，该功能仅支持查询单角色卡牌技能，请加上角色参数（如: miku、一歌等）进行详细查询
+""".strip()
+            with VSplit().set_content_align('l').set_item_align('l').set_sep(16).set_item_bg(roundrect_bg()):
+                TextBox(note, note_style, use_real_line_count=True).set_padding(12)
+
+            # 参考“获取时间 按年份”视图：每个分类一列，列内按顺序展示卡牌
+            with HSplit().set_content_align('lt').set_item_align('lt').set_bg(roundrect_bg()).set_padding(16).set_sep(24):
+                for group_key in group_keys:
+                    infos = grouped_infos[group_key]
+                    with VSplit().set_content_align('lt').set_item_align('lt').set_sep(12):
+                        title = f"— {group_key}% —" if skill_view_mode == 'score' else f"— {group_key} —"
+                        with HSplit().set_content_align('c').set_item_align('c').set_w(item_width).set_bg(roundrect_bg()).set_padding(8):
+                            TextBox(title, TextStyle(font=DEFAULT_BOLD_FONT, size=20, color=BLACK))
+                        for info in infos:
+                            draw_skill_card(info)
+
+    add_watermark(canvas)
+    return await canvas.get_img()
 
 # 获取指定ID的技能信息
 async def get_skill_info(ctx: SekaiHandlerContext, sid: int, card: dict):
@@ -1328,7 +1655,7 @@ async def _(ctx: SekaiHandlerContext):
 
     sort_by, args = _parse_box_sort(args)
 
-    is_created_at_mode, group_by_year, args = _parse_box_mode(args)
+    is_created_at_mode, group_by_year, skill_view_mode, args = _parse_box_mode(args)
 
     cards, args = await search_multi_cards(ctx, args, contain_leak=False)
 
@@ -1350,7 +1677,14 @@ async def _(ctx: SekaiHandlerContext):
     assert_and_reply(not args, f"无法解析的参数:\"{args}\"")
     assert_and_reply(cards, "没有找到符合条件的卡牌")
 
-    if is_created_at_mode:
+    if skill_view_mode:
+        unique_charas = set(card['characterId'] for card in cards)
+        assert_and_reply(
+            len(unique_charas) <= 1,
+            "考虑到布局，该功能仅支持查询单角色卡牌技能\n请加上角色参数（如: miku、一歌等）进行详细查询\n如果你确定已经加上了单个角色名称，请检查各参数之间是否用空格隔开"
+        )
+        img = await compose_skill_view_image(ctx, ctx.user_id, cards, show_id, skill_view_mode)
+    elif is_created_at_mode:
         unique_charas = set(card['characterId'] for card in cards)
         assert_and_reply(
             len(unique_charas) <= 1, 

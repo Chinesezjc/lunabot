@@ -959,7 +959,7 @@ async def compose_profile_image(ctx: SekaiHandlerContext, basic_profile: dict, v
         with VSplit().set_sep(16).set_item_bg(ui_bg) as ret:
             with Frame().set_content_align('rb'):
                 hs, vs, gw, gh = 8, 7, 96, 48
-                
+
                 # 左侧：角色等级
                 with Grid(col_count=6).set_sep(hsep=hs, vsep=vs).set_padding(32):
                     chara_list = [
@@ -977,7 +977,7 @@ async def compose_profile_image(ctx: SekaiHandlerContext, basic_profile: dict, v
                         cid = int(get_cid_by_nickname(chara))
                         chara_data = find_by(basic_profile['userCharacters'], 'characterId', cid)
                         rank = chara_data['characterRank'] if chara_data else 1
-                        
+
                         with Frame().set_size((gw, gh)):
                             chara_img = ctx.static_imgs.get(f'chara_rank_icon/{chara}.png')
                             ImageBox(chara_img, size=(gw, gh), use_alphablend=True)
@@ -2125,7 +2125,7 @@ async def _(ctx: SekaiHandlerContext):
 示例:
 {ctx.original_trigger_cmd} miku
 {ctx.original_trigger_cmd} miku all 队长次数
-发送“/cr任务 help”获取详细帮助 
+发送“/cr任务 help”获取详细帮助
 """.strip()
     raw_args = ctx.get_args().strip()
     assert_and_reply(raw_args, help_msg)
@@ -2133,8 +2133,8 @@ async def _(ctx: SekaiHandlerContext):
         help_text = f"""
 # CR任务
 
-查询指定角色的CR任务进度，或查看某个任务的全量档位表。  
-需要📡抓包数据。  
+查询指定角色的CR任务进度，或查看某个任务的全量档位表。
+需要📡抓包数据。
 支持服务器: `所有`
 
 ## 基础用法

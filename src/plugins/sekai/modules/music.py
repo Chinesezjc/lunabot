@@ -20,6 +20,7 @@ from .event import extract_ban_event
 from .resbox import get_res_icon
 import rapidfuzz
 import pandas as pd
+from PIL import ImageOps
 
 
 music_group_sub = SekaiGroupSubHelper("music", "新曲通知", ALL_SERVER_REGIONS)
@@ -228,6 +229,17 @@ class ChartBpmData:
     bpm_events: List[Dict[str, float]]
     bar_count: int
     duration: float
+
+
+@dataclass
+class AnvoEntry:
+    music_vocal_id: int
+    music_id: int
+    title: str
+    published_at: int
+    chara_ids: List[int]
+    cover_img: Image.Image
+    owned: bool
 
 
 # ======================= 别名处理 ======================= #
@@ -1073,6 +1085,181 @@ async def get_music_cover_thumb(ctx: SekaiHandlerContext, mid: int) -> Image.Ima
     assert_and_reply(music, f"歌曲ID={mid}不存在")
     asset_name = music['assetbundleName']
     return await ctx.rip.img(f"music/jacket/{asset_name}_rip/{asset_name}.png", use_img_cache=True, img_cache_max_res=80*80)
+
+# 根据歌曲id获取曲绘（大图）
+async def get_music_cover(ctx: SekaiHandlerContext, mid: int, max_res: int = 256 * 256) -> Image.Image:
+    music = await ctx.md.musics.find_by_id(mid)
+    assert_and_reply(music, f"歌曲ID={mid}不存在")
+    asset_name = music['assetbundleName']
+    return await ctx.rip.img(f"music/jacket/{asset_name}_rip/{asset_name}.png", use_img_cache=True, img_cache_max_res=max_res)
+
+
+def parse_anvo_args(args: str) -> int:
+    help_msg = """
+使用方式:
+1. /anvo 角色名
+""".strip()
+
+    s = args.strip()
+    assert_and_reply(s, help_msg)
+
+    nickname, rest = extract_nickname_from_args(s)
+    assert_and_reply(nickname, f"未识别到角色名称\n{help_msg}")
+    assert_and_reply(not rest.strip(), f"参数无法解析: {rest}\n{help_msg}")
+
+    cid = get_cid_by_nickname(nickname)
+    assert_and_reply(cid is not None, f"角色名无效: {nickname}")
+    return cid
+
+
+def get_owned_music_vocal_ids(profile: dict) -> set[int]:
+    vocals = list(profile.get('userMusicVocals', []) or [])
+    if not vocals:
+        # 兼容部分区服/版本可能嵌套在 userMusics 中的结构
+        for item in profile.get('userMusics', []):
+            vocals.extend(item.get('userMusicVocals', []))
+
+    ret: set[int] = set()
+    for item in vocals:
+        vid = item.get('musicVocalId', None)
+        if vid is not None:
+            ret.add(int(vid))
+    return ret
+
+
+async def query_character_anvo_entries(
+    ctx: SekaiHandlerContext,
+    cid: int,
+    owned_music_vocal_ids: set[int],
+) -> List[AnvoEntry]:
+    valid_musics = await get_valid_musics(ctx, leak=False)
+    valid_music_map = {m['id']: m for m in valid_musics}
+
+    vocal_infos = []
+    for vocal in await ctx.md.music_vocals.get():
+        if vocal.get('musicVocalType') != 'another_vocal':
+            continue
+        music_id = int(vocal['musicId'])
+        if music_id not in valid_music_map:
+            continue
+
+        chara_items = []
+        for item in vocal.get('characters', []):
+            if item.get('characterType') == 'game_character' and item.get('characterId') is not None:
+                chara_items.append(item)
+        chara_items.sort(key=lambda x: x.get('seq', 0))
+        chara_ids = [int(item['characterId']) for item in chara_items]
+        if cid not in chara_ids:
+            continue
+
+        music = valid_music_map[music_id]
+        vocal_infos.append({
+            'music_vocal_id': int(vocal['id']),
+            'music_id': music_id,
+            'title': music['title'],
+            'published_at': int(music['publishedAt']),
+            'chara_ids': chara_ids,
+            'owned': int(vocal['id']) in owned_music_vocal_ids,
+        })
+
+    vocal_infos.sort(key=lambda x: (x['published_at'], x['music_id'], x['music_vocal_id']))
+
+    covers = await batch_gather(*[
+        get_music_cover(ctx, item['music_id'], max_res=256 * 256)
+        for item in vocal_infos
+    ])
+
+    return [
+        AnvoEntry(
+            music_vocal_id=item['music_vocal_id'],
+            music_id=item['music_id'],
+            title=item['title'],
+            published_at=item['published_at'],
+            chara_ids=item['chara_ids'],
+            cover_img=cover,
+            owned=item['owned'],
+        )
+        for item, cover in zip(vocal_infos, covers)
+    ]
+
+
+def apply_anvo_unowned_effect(img: Image.Image) -> Image.Image:
+    img = img.convert("RGBA")
+    gray = ImageOps.grayscale(img).convert("RGBA")
+    gray.alpha_composite(Image.new("RGBA", gray.size, (20, 20, 30, 120)))
+    return gray
+
+
+async def compose_anvo_list_image(
+    ctx: SekaiHandlerContext,
+    profile: dict,
+    err_msg: str,
+    cid: int,
+    entries: List[AnvoEntry],
+    total_count: int,
+    owned_count: int,
+) -> Image.Image:
+    chara = await ctx.md.game_characters.find_by_id(cid)
+    chara_name = f"{chara.get('firstName', '')}{chara.get('givenName', '')}" if chara else str(cid)
+
+    lock_icon = None
+    try:
+        lock_icon = ctx.static_imgs.get("lock.png").convert("RGBA")
+    except Exception:
+        lock_icon = None
+
+    with Canvas(bg=SEKAI_BLUE_BG).set_padding(BG_PADDING) as canvas:
+        with VSplit().set_content_align('lt').set_item_align('lt').set_sep(16):
+            await get_detailed_profile_card(ctx, profile, err_msg)
+
+            with VSplit().set_bg(roundrect_bg()).set_padding(16).set_sep(12):
+                TextBox(
+                    f"{chara_name} Another Vocal 持有情况",
+                    TextStyle(DEFAULT_HEAVY_FONT, 28, BLACK),
+                )
+                TextBox(
+                    f"已持有 {owned_count}/{total_count} 首",
+                    TextStyle(DEFAULT_BOLD_FONT, 20, (80, 80, 80)),
+                )
+
+                with Grid(col_count=5, hsep=12, vsep=12).set_content_align('lt').set_item_align('lt'):
+                    for item in entries:
+                        with VSplit().set_content_align('t').set_item_align('c').set_sep(8).set_padding(10) \
+                            .set_bg(roundrect_bg(fill=(255, 255, 255, 180), radius=8)):
+                            TextBox(
+                                truncate(item.title, 24),
+                                TextStyle(DEFAULT_BOLD_FONT, 20, BLACK),
+                                line_count=1,
+                                overflow="clip",
+                            ).set_w(220).set_content_align('c')
+
+                            with Frame().set_size((220, 220)).set_content_align('lt'):
+                                cover = item.cover_img.resize((220, 220), Image.BICUBIC)
+                                if not item.owned:
+                                    cover = apply_anvo_unowned_effect(cover)
+                                ImageBox(cover, size=(220, 220), image_size_mode='fill', shadow=True)
+
+                                # 左下角叠加vocal对应角色icon
+                                icon_size = 40
+                                overlap = 10
+                                for idx, icon_cid in enumerate(item.chara_ids):
+                                    icon_unit = get_unit_by_chara_id(icon_cid) if icon_cid == 21 else None
+                                    icon_img = get_chara_icon_by_chara_id(icon_cid, size=icon_size, unit=icon_unit)
+                                    ox = 6 + idx * (icon_size - overlap)
+                                    oy = 220 - icon_size - 6
+                                    ImageBox(icon_img, size=(icon_size, icon_size), use_alphablend=True, shadow=True).set_offset((ox, oy))
+
+                                if not item.owned and lock_icon is not None:
+                                    lock_size = int(220 * 0.33)
+                                    ImageBox(lock_icon, size=(lock_size, lock_size), use_alphablend=True, shadow=True) \
+                                        .set_offset(((220 - lock_size) // 2, (220 - lock_size) // 2))
+
+                            status_text = "已持有" if item.owned else "未持有"
+                            status_color = (15, 128, 70) if item.owned else (120, 120, 120)
+                            TextBox(status_text, TextStyle(DEFAULT_FONT, 16, status_color))
+
+    add_watermark(canvas)
+    return await canvas.get_img()
 
 # 获取曲目翻译名 lang in ['cn', 'en']
 async def get_music_trans_title(mid: int, lang: str, default: str=None) -> str:
@@ -2764,6 +2951,49 @@ async def _(ctx: SekaiHandlerContext):
     cover = await ctx.rip.img(f"music/jacket/{asset_name}_rip/{asset_name}.png")
     msg = await get_image_cq(cover) + (f"【{mid}】{title}\n" + ret.candidate_msg).strip()
     return await ctx.asend_reply_msg(msg)
+
+
+# 查角色anvo持有情况，需要userMusicVocals字段
+pjsk_anvo = SekaiCmdHandler([
+    "/anvo", "/pjsk anvo",
+])
+pjsk_anvo.check_cdrate(cd).check_wblist(gbl)
+@pjsk_anvo.handle()
+async def _(ctx: SekaiHandlerContext):
+    cid = parse_anvo_args(ctx.get_args())
+
+    base_filter = get_detailed_profile_card_filter()
+    profile, err_msg = await get_detailed_profile(
+        ctx,
+        ctx.user_id,
+        raise_exc=True,
+        filter=base_filter | {'userMusicVocals', 'userMusics'},
+        strict=False,
+    )
+    missing_base = profile.missing_fields(base_filter)
+    assert_and_reply(
+        not missing_base,
+        f"你的{get_region_name(ctx.region)}Suite抓包数据中缺少必要的字段: {', '.join(missing_base)}"
+    )
+    assert_and_reply(
+        'userMusicVocals' in profile or 'userMusics' in profile,
+        "你的Suite数据来源没有提供userMusicVocals/userMusics数据"
+    )
+
+    owned_music_vocal_ids = get_owned_music_vocal_ids(profile)
+    all_entries = await query_character_anvo_entries(ctx, cid, owned_music_vocal_ids)
+    assert_and_reply(all_entries, "该角色暂无可查询的Another Vocal")
+
+    img = await compose_anvo_list_image(
+        ctx=ctx,
+        profile=profile,
+        err_msg=err_msg,
+        cid=cid,
+        entries=all_entries,
+        total_count=len(all_entries),
+        owned_count=sum(1 for item in all_entries if item.owned),
+    )
+    return await ctx.asend_reply_msg(await get_image_cq(img, low_quality=True))
 
 
 # best30

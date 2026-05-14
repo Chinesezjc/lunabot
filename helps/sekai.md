@@ -578,6 +578,16 @@ Project Sekai（世界计划）游戏多区服服务
 - `/查曲绘 虾`
 
 
+### 查询角色Another Vocal持有情况
+`/anvo` `/pjsk anvo`
+> 查询指定角色全部Another Vocal的持有情况，需要📡抓包数据  
+需要指定一位角色名称   
+支持服务器: `所有`
+
+- `/anvo miku`
+- `/anvo luka`
+
+
 ### 查询歌曲列表
 `/歌曲列表` `/pjsk music list` `/pjsk song list` `/难度排行` `/定数表`
 > 查询指定难度的全部歌曲列表，存在📡抓包数据时会展示每首歌是否Clear/FC/AP  

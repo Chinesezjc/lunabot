@@ -149,4 +149,4 @@ src/private/
 
 workspace/
 run/
-Makefile
+.claude/

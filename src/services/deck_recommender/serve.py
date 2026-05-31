@@ -22,18 +22,37 @@ except ImportError:
 
 
 def update_data(
-    region: str, 
-    masterdata_version: str, 
+    region: str,
+    masterdata_version: str,
+    masterdata_state: str | None,
     masterdata: dict[str, bytes] | None,
     musicmetas_update_ts: int,
     musicmetas: bytes | None,
+    force: bool = False,
 ):
     db = load_json(DB_PATH, default={})
 
     missing_data = set()
 
+    # 检查 masterdata 是否需要更新
     current_masterdata_version = db.get('masterdata_version', {}).get(region)
-    if current_masterdata_version != masterdata_version:
+    current_masterdata_state = db.get('masterdata_state', {}).get(region)
+    version_changed = current_masterdata_version != masterdata_version
+    state_changed = masterdata_state and current_masterdata_state != masterdata_state
+
+    # 检查是否需要强制同步（超过阈值时间未全量同步）
+    need_force_sync = False
+    if not version_changed and not state_changed:
+        last_full_sync = db.get('last_full_sync_ts', {}).get(region)
+        if last_full_sync and force:
+            need_force_sync = True
+        elif last_full_sync:
+            hours_since_sync = (time.time() - last_full_sync) / 3600
+            if hours_since_sync > FORCE_SYNC_INTERVAL_HOURS:
+                log(f"{region} 距离上次全量同步已过 {hours_since_sync:.1f} 小时，触发强制同步")
+                need_force_sync = True
+
+    if version_changed or state_changed or need_force_sync:
         if not masterdata:
             missing_data.add('masterdata')
         else:
@@ -41,8 +60,13 @@ def update_data(
             for name, md in masterdata.items():
                 write_file(pjoin(local_md_dir, name), md)
             db.setdefault('masterdata_version', {})[region] = masterdata_version
-            log(f"更新 {region} MasterData {current_masterdata_version} -> {masterdata_version}")
+            if masterdata_state:
+                db.setdefault('masterdata_state', {})[region] = masterdata_state
+            db.setdefault('last_full_sync_ts', {})[region] = int(time.time())
+            reason = "强制同步" if need_force_sync else ("指纹变化" if state_changed else "版本变化")
+            log(f"更新 {region} MasterData {current_masterdata_version} -> {masterdata_version} ({reason})")
 
+    # 检查 musicmetas 是否需要更新
     current_musicmetas_update_ts = db.get('musicmetas_update_ts', {}).get(region)
     if current_musicmetas_update_ts != musicmetas_update_ts:
         if not musicmetas:
@@ -92,7 +116,9 @@ async def _(request: Request):
         data = loads_json(segments[0])
         region = data['region']
         masterdata_version      = data['masterdata_version']
+        masterdata_state        = data.get('masterdata_state', None)
         musicmetas_update_ts    = data['musicmetas_update_ts']
+        force                   = data.get('force', False)
 
         masterdatas: dict[str, bytes] = {}
         musicmetas: bytes = None
@@ -103,8 +129,8 @@ async def _(request: Request):
                 musicmetas = value
             else:
                 masterdatas[key] = value
-            
-        update_data(region, masterdata_version, masterdatas, musicmetas_update_ts, musicmetas)
+
+        update_data(region, masterdata_version, masterdata_state, masterdatas, musicmetas_update_ts, musicmetas, force=force)
 
     except HTTPException as he:
         raise he

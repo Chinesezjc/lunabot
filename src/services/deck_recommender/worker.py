@@ -34,6 +34,7 @@ class Worker:
             return
         self.recommender = SekaiDeckRecommend()
         self.masterdata_version: dict[str, str] = {}
+        self.masterdata_state: dict[str, str] = {}
         self.musicmetas_update_ts: dict[str, int] = {}
         self.userdata_cache: list[tuple[str, DeckRecommendUserData]] = []
         self.inited = True
@@ -77,11 +78,17 @@ class Worker:
         db = load_json(DB_PATH, default={})
 
         masterdata_version = db.get('masterdata_version', {}).get(region)
-        if self.masterdata_version.get(region) != masterdata_version:
+        masterdata_state = db.get('masterdata_state', {}).get(region)
+        version_changed = self.masterdata_version.get(region) != masterdata_version
+        state_changed = masterdata_state and self.masterdata_state.get(region) != masterdata_state
+        if version_changed or state_changed:
             local_md_dir = pjoin(DATA_DIR, 'masterdata', region)
             self.recommender.update_masterdata(local_md_dir, region)
             self.masterdata_version[region] = masterdata_version
-            self.log(f"加载 {region} MasterData: v{masterdata_version}")
+            if masterdata_state:
+                self.masterdata_state[region] = masterdata_state
+            reason = "指纹变化" if (not version_changed and state_changed) else "版本变化"
+            self.log(f"加载 {region} MasterData: v{masterdata_version} ({reason})")
 
         musicmetas_update_ts = db.get('musicmetas_update_ts', {}).get(region)
         if self.musicmetas_update_ts.get(region) != musicmetas_update_ts:

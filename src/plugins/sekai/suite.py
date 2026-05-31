@@ -144,6 +144,10 @@ CN_USER_MUSIC_ACHIEVEMENT_KEYS = [
     "musicAchievementId",
 ]
 
+CN_USER_MUSIC_VOCAL_KEYS = [
+    "musicVocalId",
+]
+
 CN_USER_CHARACTER_MISSION_V2_STATUS_KEYS = [
     "missionId",
     "parameterGroupId",
@@ -264,6 +268,11 @@ def _normalize_cn_suite_payload(payload: Any) -> Any:
             data["userMusicAchievements"],
             CN_USER_MUSIC_ACHIEVEMENT_KEYS,
         )
+    if "userMusicVocals" in data:
+        data["userMusicVocals"] = _normalize_row_list(
+            data["userMusicVocals"],
+            CN_USER_MUSIC_VOCAL_KEYS,
+        )
 
     user_id: int | None = None
     user_gamedata = data.get("userGamedata")
@@ -324,6 +333,8 @@ class Suite:
     userCharacterMissionV2s: List[Dict[str, Any]] = field(default_factory=list)
     userCharacterMissionV2Statuses: List[Dict[str, Any]] = field(default_factory=list)
     userGachas: List[Dict[str, Any]] = field(default_factory=list)
+    userMusicVocals: List[Dict[str, Any]] = field(default_factory=list)
+    userMusics: List[Dict[str, Any]] = field(default_factory=list)
 
     _present_fields: Set[str] = field(default_factory=set, repr=False)
     _extra_fields: Dict[str, Any] = field(default_factory=dict, repr=False)
@@ -357,6 +368,8 @@ class Suite:
         "userCharacterMissionV2s",
         "userCharacterMissionV2Statuses",
         "userGachas",
+        "userMusicVocals",
+        "userMusics",
     }
     ALL_FIELDS: ClassVar[List[str]] = [
         "upload_time",
@@ -388,6 +401,8 @@ class Suite:
         "userCharacterMissionV2s",
         "userCharacterMissionV2Statuses",
         "userGachas",
+        "userMusicVocals",
+        "userMusics",
     ]
 
     @classmethod

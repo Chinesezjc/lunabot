@@ -4,6 +4,7 @@ from ..common import *
 from ..handler import *
 from ..asset import *
 from ..draw import *
+from ..suite import Suite
 from ..sub import SekaiUserSubHelper, SekaiGroupSubHelper
 from .profile import (
     get_detailed_profile, 
@@ -1112,11 +1113,11 @@ def parse_anvo_args(args: str) -> int:
     return cid
 
 
-def get_owned_music_vocal_ids(profile: dict) -> set[int]:
-    vocals = list(profile.get('userMusicVocals', []) or [])
+def get_owned_music_vocal_ids(profile: Suite) -> set[int]:
+    vocals = list(profile.userMusicVocals or [])
     if not vocals:
         # 兼容部分区服/版本可能嵌套在 userMusics 中的结构
-        for item in profile.get('userMusics', []):
+        for item in profile.userMusics:
             vocals.extend(item.get('userMusicVocals', []))
 
     ret: set[int] = set()

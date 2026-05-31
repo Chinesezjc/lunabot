@@ -156,6 +156,8 @@ class MasterDataManager:
         self._set_sort_keys(DEFAULT_SORT_KEYS)
         self.sorted_data: Dict[str, Dict[str, List[Any]]] = {}          # sorted_data[region][key] = [item1, item2, ...]
         self.lock = asyncio.Lock()
+        self._bg_updating: Dict[str, bool] = {}
+        self._bg_tasks: set[asyncio.Task] = set()
 
     def _set_index_keys(self, index_keys: Union[str, List[str], Dict[str, List[str]]]):
         if isinstance(index_keys, str):
@@ -285,47 +287,77 @@ class MasterDataManager:
             except Exception as e:
                 logger.print_exc(f"MasterData [{region}.{self.name}] 更新后回调 [{name}] 执行失败")
 
+    async def _try_download_newer(self, region: str):
+        """并发尝试所有更新源，使用最先成功的结果"""
+        db_mgr = RegionMasterDbManager.get(region)
+        sources = await db_mgr.get_all_sources()
+        current_version = self.version.get(region, DEFAULT_VERSION)
+        newer_sources = [s for s in sources if get_version_order(current_version) < get_version_order(s.version)]
+        if not newer_sources:
+            return
+        download_ok = False
+        error_list: list[tuple[str, str]] = []
+        tasks = {asyncio.create_task(self._download_from_db(region, source)): source
+                 for source in newer_sources}
+        pending = set(tasks.keys())
+        while pending:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                source = tasks[task]
+                exc = task.exception()
+                if exc is None:
+                    for t in pending:
+                        t.cancel()
+                    pending.clear()
+                    download_ok = True
+                    break
+                else:
+                    err = get_exc_desc(exc)
+                    error_list.append((source.name, err))
+                    logger.warning(
+                        f"MasterData [{region}.{self.name}] 从源 [{source.name}] 更新失败: {err}"
+                    )
+            if download_ok:
+                break
+        if not download_ok and self.data.get(region) is None:
+            error_text = " | ".join([f"[{name}] {truncate(err, 80)}" for name, err in error_list]) or "unknown error"
+            raise Exception(f"获取 MasterData [{region}.{self.name}] 的数据失败: {error_text}")
+        elif not download_ok:
+            logger.warning(
+                f"MasterData [{region}.{self.name}] 所有更新源均失败，继续使用本地缓存版本 {self.version.get(region, DEFAULT_VERSION)}"
+            )
+
+    async def _background_update(self, region: str):
+        try:
+            async with self.lock:
+                await self._try_download_newer(region)
+        except Exception as e:
+            logger.warning(f"MasterData [{region}.{self.name}] 后台更新失败: {e}")
+        finally:
+            self._bg_updating[region] = False
+
     async def _update_before_get(self, region: str):
         async with self.lock:
             # 从缓存加载
             if self.data.get(region) is None:
-                try: 
+                try:
                     await self._load_from_cache(region)
                 except Exception as e:
                     logger.warning(f"MasterData [{region}.{self.name}] 从本地缓存加载失败: {e}")
-            # 检查是否更新
-            db_mgr = RegionMasterDbManager.get(region)
-            sources = await db_mgr.get_all_sources()
-            current_version = self.version.get(region, DEFAULT_VERSION)
 
-            # 仅当存在更高版本时尝试下载，失败则回退到其他源
-            newer_sources = [s for s in sources if get_version_order(current_version) < get_version_order(s.version)]
-            if newer_sources:
-                download_ok = False
-                error_list: list[tuple[str, str]] = []
-                for source in newer_sources:
-                    try:
-                        await self._download_from_db(region, source)
-                        download_ok = True
-                        break
-                    except Exception as e:
-                        err = get_exc_desc(e)
-                        error_list.append((source.name, err))
-                        logger.warning(
-                            f"MasterData [{region}.{self.name}] 从源 [{source.name}] 更新失败: {err}"
-                        )
+            # 有缓存数据：立即返回，后台异步更新
+            if self.data.get(region) is not None:
+                if not self._bg_updating.get(region, False):
+                    self._bg_updating[region] = True
+                    task = asyncio.create_task(self._background_update(region))
+                    self._bg_tasks.add(task)
+                    task.add_done_callback(self._bg_tasks.discard)
+                return
 
-                if not download_ok and self.data.get(region) is None:
-                    error_text = " | ".join([f"[{name}] {truncate(err, 80)}" for name, err in error_list]) or "unknown error"
-                    raise Exception(f"获取 MasterData [{region}.{self.name}] 的数据失败: {error_text}")
-                elif not download_ok:
-                    logger.warning(
-                        f"MasterData [{region}.{self.name}] 所有更新源均失败，继续使用本地缓存版本 {current_version}"
-                    )
-            # 检查是否存在，如果仍然不存在则报错
+            # 无缓存：阻塞等待首次下载
+            await self._try_download_newer(region)
             if self.data.get(region) is None:
                 raise Exception(f"获取 MasterData [{region}.{self.name}] 的数据失败")
-
     async def get_data(self, region: str):
         """
         获取数据
@@ -430,6 +462,17 @@ class MasterDataManager:
         设置排序键
         """
         cls.get(name)._set_sort_keys(sort_keys)
+
+
+@on_shutdown()
+async def _cancel_masterdata_bg_tasks():
+    all_tasks = []
+    for mgr in MasterDataManager._all_mgrs.values():
+        all_tasks.extend(mgr._bg_tasks)
+    for task in all_tasks:
+        task.cancel()
+    if all_tasks:
+        await asyncio.gather(*all_tasks, return_exceptions=True)
 
 
 class RegionMasterDataWrapper:

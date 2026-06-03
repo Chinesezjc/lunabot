@@ -30,8 +30,18 @@ def load_json(file_path: str, default=None) -> dict:
         if default is not None:
             return default
         raise FileNotFoundError(f"File not found: {file_path}")
-    with open(file_path, 'rb') as file:
-        return orjson.loads(file.read())
+    try:
+        with open(file_path, 'rb') as file:
+            content = file.read()
+            if not content or content.strip() == b'':
+                if default is not None:
+                    return default
+                raise ValueError(f"File is empty: {file_path}")
+            return orjson.loads(content)
+    except orjson.JSONDecodeError as e:
+        if default is not None:
+            return default
+        raise ValueError(f"File is corrupted: {file_path}") from e
     
 def dump_json(data: dict, file_path: str, indent: bool = True) -> None:
     os.makedirs(os.path.dirname(file_path), exist_ok=True)

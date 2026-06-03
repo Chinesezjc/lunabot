@@ -11,14 +11,15 @@ file_db = get_file_db("data/llm/db.json", logger)
 
 def get_model_preset(key: str) -> Union[str, List[str], dict]:
     ret = Config('llm.model_preset').get(key)
-    def parse_ref(s: str):
-        return get_model_preset(s[1:]) if s.startswith("&") else s
-    if isinstance(ret, str):
-        ret = parse_ref(ret)
-    if isinstance(ret, list):
-        ret = [parse_ref(s) for s in ret]
-    if isinstance(ret, dict):
-        ret = {k: parse_ref(v) for k, v in ret.items()}
+    def parse_ref(s):
+        if isinstance(s, str) and s.startswith("&"):
+            return get_model_preset(s[1:])
+        if isinstance(s, list):
+            return [parse_ref(item) for item in s]
+        if isinstance(s, dict):
+            return {k: parse_ref(v) for k, v in s.items()}
+        return s
+    ret = parse_ref(ret)
     return ret
 
 

@@ -669,16 +669,23 @@ class Painter:
             pos = (pos[0] - text_offset[0] + self.offset[0], pos[1] - text_offset[1] + self.offset[1])
             draw.text(pos, text, font=font, fill=fill, align=align, anchor='ls')
         else:
-            with Pilmoji(self.img, source=GoogleEmojiSource) as pilmoji:
+            try:
+                with Pilmoji(self.img, source=GoogleEmojiSource) as pilmoji:
+                    text_offset = (0, -std_size[1])
+                    offset = global_config.get('painter.emoji.offset')
+                    scale = global_config.get('painter.emoji.scale')
+                    offset = (int(offset[0] * std_size[1] / 32), int(offset[1] * std_size[1] / 32) - std_size[1])
+                    pos = (pos[0] - text_offset[0] + self.offset[0], pos[1] - text_offset[1] + self.offset[1])
+                    pilmoji.text(
+                        pos, text, font=font, fill=fill, align=align,
+                        emoji_position_offset=offset, emoji_scale_factor=scale,
+                        anchor='ls')
+            except Exception:
+                # emoji CDN 下载失败时回退到纯文本渲染
+                draw = ImageDraw.Draw(self.img)
                 text_offset = (0, -std_size[1])
-                offset = global_config.get('painter.emoji.offset')
-                scale = global_config.get('painter.emoji.scale')
-                offset = (int(offset[0] * std_size[1] / 32), int(offset[1] * std_size[1] / 32) - std_size[1])
                 pos = (pos[0] - text_offset[0] + self.offset[0], pos[1] - text_offset[1] + self.offset[1])
-                pilmoji.text(
-                    pos, text, font=font, fill=fill, align=align, 
-                    emoji_position_offset=offset, emoji_scale_factor=scale,
-                    anchor='ls')
+                draw.text(pos, text, font=font, fill=fill, align=align, anchor='ls')
         return self
     
     def _get_aa_roundrect(

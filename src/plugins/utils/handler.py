@@ -161,7 +161,7 @@ def _mp_check_at_me(bot: "Bot", event: MessageEvent) -> None:
             )
 
         # check the first segment
-        if _is_at_me_seg(event.message[0]):
+        if event.message and _is_at_me_seg(event.message[0]):
             event.to_me = True
             event.message.pop(0)
             _at_me_msg_ids.add(event.message_id)
@@ -179,7 +179,7 @@ def _mp_check_at_me(bot: "Bot", event: MessageEvent) -> None:
                     if not event.message[0].data["text"]:
                         del event.message[0]
 
-        if not event.to_me:
+        if not event.to_me and event.message:
             # check the last segment
             i = -1
             last_msg_seg = event.message[i]

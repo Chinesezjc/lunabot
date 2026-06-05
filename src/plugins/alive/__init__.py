@@ -1,6 +1,6 @@
 from ..utils import *
 from datetime import datetime
-from nonebot_plugin_picstatus.collectors import collect_all
+from nonebot_plugin_picstatus.collectors import collect_all, collect_perodic_collectors
 from nonebot_plugin_picstatus.bg_provider import bg_preloader
 from nonebot_plugin_picstatus.templates import render_current_template
 from nonebot.adapters.onebot.v11 import NoticeEvent
@@ -116,6 +116,8 @@ async def _(ctx: HandlerContext):
 # 获取状态图
 async def get_status_image_cq():
     bg = await bg_preloader.get()
+    # 启动后周期采集器可能还没跑过，先手动采集一轮确保 deque 非空
+    await collect_perodic_collectors()
     collected = await collect_all()
     return await get_image_cq(
         await render_current_template(collected=collected, bg=bg),

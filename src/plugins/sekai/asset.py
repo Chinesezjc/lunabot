@@ -1229,9 +1229,11 @@ class WebJsonRes:
             except Exception as e:
                 if self.data:
                     logger.warning(f"更新网页Json资源 [{self.name}] 失败: {get_exc_desc(e)}，继续使用旧数据")
+                    self.update_time = datetime.now()  # 抑制短期内重复重试
                 elif self.file_cache_path:
                     self.data = load_json(self.file_cache_path)
                     self.hash = get_md5(dumps_json(self.data, indent=False).encode('utf-8'))
+                    self.update_time = datetime.now()
                     logger.warning(f"更新网页Json资源 [{self.name}] 失败: {get_exc_desc(e)}，从本地文件缓存中加载")
                 else:
                     if raise_on_no_data:

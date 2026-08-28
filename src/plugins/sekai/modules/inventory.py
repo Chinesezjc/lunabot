@@ -21,7 +21,7 @@ INVENTORY_HELP = """使用方式:
 /查背包 ms材料
 /查背包 记忆
 
-空参数默认不展示水晶、火罐、MySekai 材料和记忆。国服不支持 ms材料、记忆。"""
+空参数默认不展示水晶、火罐、MySekai 材料和记忆。"""
 
 INVENTORY_FILTER_DEFAULT = ""
 INVENTORY_FILTER_JEWEL = "jewel"
@@ -610,12 +610,9 @@ def parse_inventory_filter(args: str) -> str:
 
 
 def validate_inventory_filter_for_region(region: str, filter: str):
-    if region != 'cn':
-        return
-    if filter == INVENTORY_FILTER_MYSEKAI:
-        raise ReplyException("国服暂不支持查询 MySekai 材料")
-    if filter == INVENTORY_FILTER_MEMORY:
-        raise ReplyException("国服暂不支持查询记忆")
+    # 国服 masterdata 已包含完整 MySekai 材料与记忆数据（62种/26种记忆），
+    # 与日服结构一致，不再限制国服查询
+    return
 
 
 pjsk_inventory = SekaiCmdHandler([

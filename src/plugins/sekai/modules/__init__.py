@@ -6,9 +6,12 @@ from .entertainment import *
 from .event import *
 from .gacha import *
 from .honor import *
+from .housing import *
+from .inventory import *
 from .misc import *
 from .music import *
 from .mysekai import *
+from .planner import *
 from .profile import *
 from .resbox import *
 from .score import *

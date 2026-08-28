@@ -19,6 +19,10 @@ class GameApiConfig:
     create_account_api_url: Optional[str] = None
     ad_result_update_time_api_url: Optional[str] = None
     ad_result_api_url: Optional[str] = None
+    mysekai_housing_api_url: Optional[str] = None
+    mysekai_housing_back_number_top_api_url: Optional[str] = None
+    mysekai_housing_back_number_list_api_url: Optional[str] = None
+    mysekai_housing_thumbnail_api_url: Optional[str] = None
 
 
 # 获取游戏api相关配置

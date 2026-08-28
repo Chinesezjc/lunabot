@@ -1,4 +1,5 @@
 from .card_extractor import *
+from .custom_profile_cp import *
 from .card import *
 from .chart import *
 from .deck import *

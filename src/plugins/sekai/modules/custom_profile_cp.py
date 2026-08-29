@@ -215,6 +215,24 @@ async def build_custom_profile_resources(
                 }
         resources["cards"] = cards
 
+        # 卡面资源路径（渲染器 card_asset_path_for_state 读这些字段，否则 masterdata=None 时不渲染）
+        card_assets = {}
+        for cid, c in cards.items():
+            bundle = (c or {}).get('assetbundleName', '')
+            if not bundle:
+                continue
+            card_assets[cid] = {
+                'normalPath': f"character/member/{bundle}/card_normal.png",
+                'afterTrainingPath': f"character/member/{bundle}/card_after_training.png",
+                'deckNormalPath': f"character/member_cutout/{bundle}/normal.png",
+                'deckAfterTrainingPath': f"character/member_cutout/{bundle}/after_training.png",
+                'clipNormalPath': f"character/member_cutout_trm/{bundle}/normal.png",
+                'clipAfterTrainingPath': f"character/member_cutout_trm/{bundle}/after_training.png",
+                'smallNormalPath': f"character/member_small/{bundle}/card_normal.png",
+                'smallAfterTrainingPath': f"character/member_small/{bundle}/card_after_training.png",
+            }
+        resources["cardAssets"] = card_assets
+
     # 称号相关 masterdata（renderer fallback 构建 honor request 需要）
     honor_ids = set()
     for item in (card.get('customProfileCard') or {}).get('honors') or []:
@@ -229,11 +247,13 @@ async def build_custom_profile_resources(
         resources["honors"] = {int(r['id']): r for r in rows if isinstance(r, dict) and r.get('id')}
         group_ids = set()
         for r in rows:
-            if isinstance(r, dict) and r.get('honorGroupId'):
-                try:
-                    group_ids.add(int(r['honorGroupId']))
-                except (TypeError, ValueError):
-                    pass
+            if isinstance(r, dict):
+                gid = r.get('groupId') or r.get('honorGroupId')
+                if gid:
+                    try:
+                        group_ids.add(int(gid))
+                    except (TypeError, ValueError):
+                        pass
         if group_ids:
             groups = await ctx.md.honor_groups.collect_by_ids(list(group_ids))
             resources["honorGroups"] = {int(r['id']): r for r in groups if isinstance(r, dict) and r.get('id')}
@@ -310,6 +330,27 @@ def _collect_asset_paths(resources: dict, card: dict, region: str) -> set:
             paths.add(f"character/member_cutout_trm/{bundle}/{f}")
         for f in ("normal.png", "after_training.png"):
             paths.add(f"thumbnail/chara/{bundle}_{f.replace('.png','')}.png")
+
+    # 称号素材（honor/{asset}/degree_*.png + rank + frame + scroll）
+    for honor in (resources.get('honors') or {}).values():
+        asset = (honor or {}).get('assetbundleName', '')
+        if asset:
+            for mode in ('main', 'sub'):
+                paths.add(f"honor/{asset}/degree_{mode}.png")
+                paths.add(f"honor/{asset}/rank_{mode}.png")
+            paths.add(f"honor/{asset}/scroll.png")
+            paths.add(f"rank_live/honor/{asset}/degree_main.png")
+    for group in (resources.get('honorGroups') or {}).values():
+        frame_name = (group or {}).get('frameName', '')
+        if frame_name:
+            for m in ('m', 's'):
+                for r in range(1, 5):
+                    paths.add(f"honor_frame/{frame_name}/frame_degree_{m}_{r}.png")
+    for b in (resources.get('bondsHonors') or {}).values():
+        bn = (b or {}).get('assetbundleName', '')
+        if bn:
+            paths.add(f"honor/{bn}/degree_main.png")
+            paths.add(f"honor/{bn}/degree_sub.png")
 
     return paths
 

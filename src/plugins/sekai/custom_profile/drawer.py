@@ -11,6 +11,7 @@ from .limits import validate_custom_profile_card
 from .renderer import PROFILE_RENDER_VIEW_H, PROFILE_RENDER_VIEW_W, PNGRenderer
 from .model import CustomProfileCardRenderRequest
 from .config import (
+    SEKAI_DATA_DIR,
     CUSTOM_PROFILE_ASSETS_DIR,
     CUSTOM_PROFILE_FONTS_DIR,
     CUSTOM_PROFILE_MAX_ELEMENTS,
@@ -133,8 +134,11 @@ def _render_custom_profile_card_sync(
         region,
     )
 
+    # LunaBot 适配：masterdata 指向本地 masterdata 缓存目录（非 None），
+    # 让 honor/stamp/card 的 fallback 构造可用；resources 优先，缺失表 load_index 返回 {}
+    masterdata_dir = Path(SEKAI_DATA_DIR) / "assets" / "masterdata" / region
     renderer = PNGRenderer(
-        masterdata=None,
+        masterdata=masterdata_dir,
         assets=assets,
         fonts=fonts,
         resources=resources,

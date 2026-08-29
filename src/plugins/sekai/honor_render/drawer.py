@@ -34,14 +34,24 @@ def compose_full_honor_image_from_loaded_assets(
     rqd: HonorRequest,
     images: dict[str, ImageSource | None],
 ):
-    """Synchronous compose from already-resolved sources (the custom-profile renderer's path).
-
-    Sources may be decoded images or lazy asset references. Renders the shared widget tree with
-    ``Canvas.get_img_sync`` — same tree, same ops, same pixels as the async entry point below."""
-    canvas = build_honor_badge_canvas(rqd, images)
-    if canvas is None:
+    """LunaBot 适配：称号 badge 全量合成依赖 Haruki Painter 的现代 API（paste_src/push_mask 等），
+    LunaBot Painter 无对应实现。降级为直接返回称号底图（honor_img），框架/等级星等装饰省略。
+    后续如需 1:1 视觉，可单独移植 Haruki painter 扩展或复用游戏称号图资源。"""
+    base = images.get("honor_img") or images.get("empty_honor")
+    if base is None:
         return None
-    return canvas.get_img_sync()
+    # 简单合成：底图 + 可选框架（若已加载）直接叠加，不依赖 Painter 扩展
+    frame = images.get("frame_img")
+    if frame is not None:
+        try:
+            from PIL import Image as _I
+            # 尽量按底图尺寸居中叠加框架（简单位置，badge 视觉近似）
+            out = base.copy()
+            out.alpha_composite(frame.resize(base.size) if frame.size != base.size else frame)
+            return out
+        except Exception:
+            return base
+    return base
 
 
 def build_full_honor_cache_key(rqd: HonorRequest) -> str:

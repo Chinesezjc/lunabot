@@ -2364,6 +2364,9 @@ class PNGRenderer:
 
         roots.append(self.game_assets.parent.parent / "asset" / package_name / mode)
         roots.append(self.game_assets.parent.parent / package_name / mode)
+        # LunaBot 适配：素材存于 rip 缓存根 {assets}/{rel}，加入候选
+        roots.append(self.assets)
+        roots.append(self.game_assets)
 
         seen: set[Path] = set()
         result: list[Path] = []

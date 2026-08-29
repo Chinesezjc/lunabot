@@ -1476,6 +1476,24 @@ class Canvas(Frame):
         if global_config.get('plot.log_draw_time', False):
             print(f"Canvas drawn in {(datetime.now() - t).total_seconds():.3f}s, size={size}")
         return img
+
+    def get_img_sync(self, scale: float = None, cache_key: str = None):
+        """同步渲染（供 custom_profile honor 等同步调用方使用）"""
+        t = datetime.now()
+        size = self._get_self_size()
+        size_limit = global_config.get('plot.canvas_size_limit')
+        assert size[0] * size[1] <= size_limit[0] * size_limit[1], f'Canvas size is too large ({size[0]}x{size[1]})'
+        p = Painter(size=size)
+        self.draw(p)
+
+        image_dict = {}
+        for op in p.operations:
+            op.image_to_id(image_dict)
+        img = Painter._execute(p.operations, p.img, p.size, image_dict)
+        p.operations = []
+        if scale:
+            img = img.resize((int(size[0] * scale), int(size[1] * scale)), Image.Resampling.BILINEAR)
+        return img
     
 
 # =========================== 控件函数 =========================== #

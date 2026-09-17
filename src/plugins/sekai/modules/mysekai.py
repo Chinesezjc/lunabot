@@ -34,6 +34,11 @@ from ...imgtool import shrink_image
 
 MYSEKAI_REGIONS = ['jp', 'cn']
 BD_MYSEKAI_REGIONS = ['cn']
+# Haruki 工具箱没有国服 MySekai 数据源（GameAPI 的 cn+mysekai 只读本地文件），
+# 这些区服的 /msd 不查询 Haruki，也不把该栏显示成获取失败。
+# 文案与 GameAPI services/orchestrator.py 的 MYSEKAI_HARUKI_UNSUPPORTED_MESSAGE 保持一致。
+MYSEKAI_NO_HARUKI_REGIONS = ['cn']
+MYSEKAI_NO_HARUKI_NOTE = "国服 MySekai 数据不由 Haruki 工具箱提供，仅使用本地抓包数据。"
 
 bd_msr_sub = SekaiGroupSubHelper("msr", "msr指令权限", BD_MYSEKAI_REGIONS)
 msr_sub = SekaiUserSubHelper("msr", "烤森资源查询自动推送", MYSEKAI_REGIONS, only_one_group=True)
@@ -2179,8 +2184,12 @@ async def _(ctx: SekaiHandlerContext):
     uid = get_player_bind_id(ctx)
 
     task1 = get_mysekai_info(ctx, qid, raise_exc=False, mode="local", filter=['upload_time'])
-    task2 = get_mysekai_info(ctx, qid, raise_exc=False, mode="haruki", filter=['upload_time'])
-    (local_profile, local_err), (haruki_profile, haruki_err) = await asyncio.gather(task1, task2)
+    if ctx.region in MYSEKAI_NO_HARUKI_REGIONS:
+        local_profile, local_err = await task1
+        haruki_profile, haruki_err = None, None
+    else:
+        task2 = get_mysekai_info(ctx, qid, raise_exc=False, mode="haruki", filter=['upload_time'])
+        (local_profile, local_err), (haruki_profile, haruki_err) = await asyncio.gather(task1, task2)
 
     msg = f"{process_hide_uid(ctx, uid, keep=6)}({ctx.region.upper()}) Mysekai数据\n"
 
@@ -2197,7 +2206,9 @@ async def _(ctx: SekaiHandlerContext):
             upload_time_text = local_source + " " + upload_time_text
         msg += f"{upload_time_text}\n"
 
-    if haruki_err:
+    if ctx.region in MYSEKAI_NO_HARUKI_REGIONS:
+        msg += f"[Haruki工具箱]\n{MYSEKAI_NO_HARUKI_NOTE}\n"
+    elif haruki_err:
         haruki_err = haruki_err[haruki_err.find(']')+1:].strip()
         msg += f"[Haruki工具箱]\n获取失败: {haruki_err}\n"
     else:

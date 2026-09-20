@@ -4,7 +4,7 @@ from ..common import *
 from ..handler import *
 from ..asset import *
 from ..draw import *
-from ..suite import Suite
+from ..suite import Suite, normalize_cn_mysekai_payload
 from ..sub import SekaiUserSubHelper, SekaiGroupSubHelper
 from ..gameapi import get_gameapi_config, request_gameapi
 from .profile import (
@@ -180,7 +180,11 @@ async def get_mysekai_info(
             raw_info = await request_gameapi(url)
             if source_err := get_mysekai_source_error(mode, raw_info):
                 raise ReplyException(source_err)
-            mysekai_info = raw_info
+            mysekai_info = (
+                normalize_cn_mysekai_payload(raw_info)
+                if ctx.region == "cn"
+                else raw_info
+            )
         except HttpError as e:
             logger.info(f"获取 {qid} {ctx.region} {uid} mysekai抓包数据失败: {get_exc_desc(e)}")
             if e.status_code == 404:

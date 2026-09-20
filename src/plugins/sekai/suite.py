@@ -107,6 +107,33 @@ CN_USER_MYSEKAI_CHARACTER_TALK_KEYS = [
     "isRead",
 ]
 
+CN_MYSEKAI_HARVEST_MAP_KEYS = [
+    "mysekaiSiteId",
+    "userMysekaiSiteHarvestFixtures",
+    "userMysekaiSiteHarvestResourceDrops",
+]
+
+CN_MYSEKAI_HARVEST_FIXTURE_KEYS = [
+    "mysekaiSiteHarvestFixtureId",
+    "positionX",
+    "positionZ",
+    "hp",
+    "userMysekaiSiteHarvestFixtureStatus",
+    "mysekaiSiteHarvestSpawnLimitedRelationGroupId",
+]
+
+CN_MYSEKAI_HARVEST_RESOURCE_DROP_KEYS = [
+    "resourceType",
+    "resourceId",
+    "positionX",
+    "positionZ",
+    "hp",
+    "seq",
+    "mysekaiSiteHarvestResourceDropStatus",
+    "quantity",
+    "mysekaiSiteHarvestSpawnLimitedRelationGroupId",
+]
+
 CN_USER_AREA_ACTION_SET_KEYS = [
     "id",
     "status",
@@ -195,6 +222,44 @@ def _normalize_row_list(value: Any, keys: List[str]) -> Any:
         if item is not None:
             ret.append(item)
     return ret
+
+
+def normalize_cn_mysekai_payload(payload: Any) -> Any:
+    """Expand CN 6.4.0 positional harvest-map rows into named records."""
+    if not isinstance(payload, dict):
+        return payload
+
+    data = dict(payload)
+    updated = data.get("updatedResources")
+    if not isinstance(updated, dict):
+        return data
+
+    harvest_maps = updated.get("userMysekaiHarvestMaps")
+    if not isinstance(harvest_maps, list):
+        return data
+
+    normalized_maps = []
+    for raw_map in harvest_maps:
+        site_map = _row_to_dict(raw_map, CN_MYSEKAI_HARVEST_MAP_KEYS)
+        if site_map is None:
+            continue
+        site_map = dict(site_map)
+        if "userMysekaiSiteHarvestFixtures" in site_map:
+            site_map["userMysekaiSiteHarvestFixtures"] = _normalize_row_list(
+                site_map["userMysekaiSiteHarvestFixtures"],
+                CN_MYSEKAI_HARVEST_FIXTURE_KEYS,
+            )
+        if "userMysekaiSiteHarvestResourceDrops" in site_map:
+            site_map["userMysekaiSiteHarvestResourceDrops"] = _normalize_row_list(
+                site_map["userMysekaiSiteHarvestResourceDrops"],
+                CN_MYSEKAI_HARVEST_RESOURCE_DROP_KEYS,
+            )
+        normalized_maps.append(site_map)
+
+    updated = dict(updated)
+    updated["userMysekaiHarvestMaps"] = normalized_maps
+    data["updatedResources"] = updated
+    return data
 
 
 def _normalize_cn_music_results(value: Any) -> Any:

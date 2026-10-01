@@ -73,6 +73,10 @@ async def alive_check():
             st.cur_elapsed += datetime.now() - st.last_check_time
         st.cur_state = new_state
 
+        # 断线持续时间超过阈值后重新武装群通知，使下次恢复连接时能再次报告
+        if st.cur_state == DISCONNECT_STATE and st.cur_elapsed >= timedelta(seconds=TIME_THRESHOLD_CFG.get()):
+            st.group_reported = False
+
         # 如果获取链接，立刻报告群聊
         if not st.group_reported and st.cur_state == CONNECT_STATE:
             for group_id in REPORT_GROUPS_CFG.get():

@@ -1496,10 +1496,13 @@ async def compose_mysekai_fixture_detail_image(ctx: SekaiHandlerContext, fids: L
     add_watermark(canvas)
     return await canvas.get_img()
 
+# 门的等级上限随区服/版本变化（国服 40，日服 70），从 masterdata 推导，避免写死后日服越界
+def calc_mysekai_gate_max_lv(gate_material_groups: List[dict]) -> int:
+    return max((int(item['groupId']) % 1000 for item in gate_material_groups), default=40)
+
+
 # 合成mysekai门升级材料图片
 async def compose_mysekai_door_upgrade_image(ctx: SekaiHandlerContext, qid: int, spec_gate_id: int = None) -> Image.Image:
-    GATE_MAX_LV = 40
-
     profile = None
     if qid:
         profile, pmsg = await get_detailed_profile(
@@ -1514,9 +1517,11 @@ async def compose_mysekai_door_upgrade_image(ctx: SekaiHandlerContext, qid: int,
         lv_materials = profile.userMysekaiMaterials
         user_materials = {item['mysekaiMaterialId']: item['quantity'] for item in lv_materials}
 
-    # 获取每级升级材料
+    # 获取每级升级材料（门的等级上限随区服变化，按实际 masterdata 推导）
+    gate_material_groups = await ctx.md.mysekai_gate_material_groups.get()
+    GATE_MAX_LV = calc_mysekai_gate_max_lv(gate_material_groups)
     gate_materials = {}
-    for item in await ctx.md.mysekai_gate_material_groups.get():
+    for item in gate_material_groups:
         gid = item['groupId'] // 1000
         level = item['groupId'] % 1000
         mid = item['mysekaiMaterialId']

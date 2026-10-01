@@ -1501,6 +1501,12 @@ def calc_mysekai_gate_max_lv(gate_material_groups: List[dict]) -> int:
     return max((int(item['groupId']) % 1000 for item in gate_material_groups), default=40)
 
 
+# 国服 masterdata 的门等级表只到 40 级（日服已到 70 级），且两边 1~40 级材料逐字一致；
+# 国服侧查询借日服表，使 41~70 级所需材料可见
+def get_mysekai_gate_material_region(region: str) -> str:
+    return 'jp' if region == 'cn' else region
+
+
 # 合成mysekai门升级材料图片
 async def compose_mysekai_door_upgrade_image(ctx: SekaiHandlerContext, qid: int, spec_gate_id: int = None) -> Image.Image:
     profile = None
@@ -1518,7 +1524,8 @@ async def compose_mysekai_door_upgrade_image(ctx: SekaiHandlerContext, qid: int,
         user_materials = {item['mysekaiMaterialId']: item['quantity'] for item in lv_materials}
 
     # 获取每级升级材料（门的等级上限随区服变化，按实际 masterdata 推导）
-    gate_material_groups = await ctx.md.mysekai_gate_material_groups.get()
+    gate_material_region = get_mysekai_gate_material_region(ctx.region)
+    gate_material_groups = await RegionMasterDataCollection(gate_material_region).mysekai_gate_material_groups.get()
     GATE_MAX_LV = calc_mysekai_gate_max_lv(gate_material_groups)
     gate_materials = {}
     for item in gate_material_groups:
